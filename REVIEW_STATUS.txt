@@ -1,0 +1,20 @@
+SS MediaOS Android Gateway - Review Status
+
+What was checked in this source archive:
+- Gradle project layout: root settings/build files and app module are present.
+- Gradle wrapper script, wrapper JAR, and wrapper properties are present.
+- AndroidManifest.xml and resource XML files parse as valid XML.
+- MainActivity, GatewayService, ApiClient, SecureConfig, and SmsSentReceiver are present in the app module.
+- Original loose Kotlin files and legacy workflow files were preserved under docs/ for comparison, not compiled as duplicate classes.
+- In-app Privacy Policy, Terms & Conditions, SMS Spam & Abuse Prevention Policy, logo, and Owned by SS MediaOS footer are present.
+
+Not verified:
+- A full Gradle/APK build could not be completed in this environment because the Gradle distribution could not be downloaded (network DNS unavailable: services.gradle.org).
+- No physical Android device was available to verify runtime permission prompts, SMS sending, background behavior, or server connectivity.
+- Google Play approval cannot be guaranteed by source code or policy text alone.
+
+Before release:
+- Build with JDK 17 and Android Studio using Gradle 8.9; resolve any build output errors.
+- Test on each target device and Android version.
+- Replace placeholder domain/support-contact text with the real HTTPS server URL and verified support/privacy contact.
+- Confirm the server API contract, token authentication, consent, and SMS rate limits.
