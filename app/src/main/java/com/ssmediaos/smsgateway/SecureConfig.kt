@@ -10,6 +10,7 @@ object SecureConfig {
     private const val KEY_SERVER_URL = "server_url"
     private const val KEY_DEVICE_ID = "device_id"
     private const val KEY_API_TOKEN = "api_token"
+    private const val KEY_DEVICE_TOKEN = "device_token"
 
     private fun preferences(context: Context) =
         context.applicationContext.getSharedPreferences(
@@ -24,11 +25,12 @@ object SecureConfig {
             ?.takeIf { it.isNotEmpty() }
 
     // Compatibility methods for existing files.
-    // These values represent Device Code and Activation Token
-    // until the API activation flow is integrated.
+    // Device ID is retained as the legacy name for Device Code.
     fun getDeviceId(context: Context): String? =
         getDeviceCode(context)
 
+    // Legacy API token getter returns the Activation Token.
+    // Use getDeviceToken() for authenticated API requests after activation.
     fun getApiToken(context: Context): String? =
         getActivationToken(context)
 
@@ -41,6 +43,12 @@ object SecureConfig {
     fun getActivationToken(context: Context): String? =
         preferences(context)
             .getString(KEY_API_TOKEN, null)
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+
+    fun getDeviceToken(context: Context): String? =
+        preferences(context)
+            .getString(KEY_DEVICE_TOKEN, null)
             ?.trim()
             ?.takeIf { it.isNotEmpty() }
 
@@ -60,11 +68,27 @@ object SecureConfig {
             return false
         }
 
-        return preferences(context).edit()
+        val prefs = preferences(context)
+        val existingUrl = prefs.getString(KEY_SERVER_URL, null)
+        val existingCode = prefs.getString(KEY_DEVICE_ID, null)
+        val existingActivationToken = prefs.getString(KEY_API_TOKEN, null)
+
+        val activationDetailsChanged =
+            existingUrl != normalizedUrl ||
+            existingCode != deviceCode ||
+            existingActivationToken != activationToken
+
+        val editor = prefs.edit()
             .putString(KEY_SERVER_URL, normalizedUrl)
             .putString(KEY_API_TOKEN, activationToken)
             .putString(KEY_DEVICE_ID, deviceCode)
-            .commit()
+
+        // Clear the old session when activation details change.
+        if (activationDetailsChanged) {
+            editor.remove(KEY_DEVICE_TOKEN)
+        }
+
+        return editor.commit()
     }
 
     fun saveActivationSettings(
@@ -81,6 +105,27 @@ object SecureConfig {
         )
     }
 
+    fun saveDeviceToken(
+        context: Context,
+        deviceToken: String
+    ): Boolean {
+        val value = deviceToken.trim()
+
+        if (value.isBlank()) return false
+
+        return preferences(context)
+            .edit()
+            .putString(KEY_DEVICE_TOKEN, value)
+            .commit()
+    }
+
+    fun clearDeviceToken(context: Context): Boolean {
+        return preferences(context)
+            .edit()
+            .remove(KEY_DEVICE_TOKEN)
+            .commit()
+    }
+
     fun saveServerUrl(
         context: Context,
         serverUrl: String
@@ -88,9 +133,17 @@ object SecureConfig {
         val normalizedUrl = normalizeServerUrl(serverUrl)
             ?: return false
 
-        return preferences(context).edit()
+        val prefs = preferences(context)
+        val oldUrl = prefs.getString(KEY_SERVER_URL, null)
+
+        val editor = prefs.edit()
             .putString(KEY_SERVER_URL, normalizedUrl)
-            .commit()
+
+        if (oldUrl != normalizedUrl) {
+            editor.remove(KEY_DEVICE_TOKEN)
+        }
+
+        return editor.commit()
     }
 
     fun saveDeviceId(
@@ -101,9 +154,17 @@ object SecureConfig {
 
         if (value.isBlank()) return false
 
-        return preferences(context).edit()
+        val prefs = preferences(context)
+        val oldCode = prefs.getString(KEY_DEVICE_ID, null)
+
+        val editor = prefs.edit()
             .putString(KEY_DEVICE_ID, value)
-            .commit()
+
+        if (oldCode != value) {
+            editor.remove(KEY_DEVICE_TOKEN)
+        }
+
+        return editor.commit()
     }
 
     fun saveDeviceCode(
@@ -119,9 +180,17 @@ object SecureConfig {
 
         if (value.isBlank()) return false
 
-        return preferences(context).edit()
+        val prefs = preferences(context)
+        val oldToken = prefs.getString(KEY_API_TOKEN, null)
+
+        val editor = prefs.edit()
             .putString(KEY_API_TOKEN, value)
-            .commit()
+
+        if (oldToken != value) {
+            editor.remove(KEY_DEVICE_TOKEN)
+        }
+
+        return editor.commit()
     }
 
     fun saveActivationToken(
@@ -150,7 +219,7 @@ object SecureConfig {
             val validHost =
                 !uri.host.isNullOrBlank()
 
-            val noUserInfo = uri.userInfo == null
+            val noUserInfo = uri.rawUserInfo == null
             val noQueryOrFragment =
                 uri.rawQuery == null && uri.rawFragment == null
 
