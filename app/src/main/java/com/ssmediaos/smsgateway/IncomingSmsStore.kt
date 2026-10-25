@@ -1,4 +1,4 @@
-```kotlin
+
 package com.ssmediaos.smsgateway
 
 import android.content.Context
@@ -24,14 +24,13 @@ object IncomingSmsStore {
         )
 
         val oldMessages = try {
-            JSONArray(preferences.getString(KEY_MESSAGES, "[]"))
+            JSONArray(preferences.getString(KEY_MESSAGES, "[]") ?: "[]")
         } catch (_: Exception) {
             JSONArray()
         }
 
         val updatedMessages = JSONArray()
 
-        // Keep the most recent messages first.
         updatedMessages.put(
             JSONObject().apply {
                 put("sender", sender)
@@ -41,7 +40,9 @@ object IncomingSmsStore {
         )
 
         for (index in 0 until oldMessages.length()) {
-            if (updatedMessages.length() >= MAX_MESSAGES) break
+            if (updatedMessages.length() >= MAX_MESSAGES) {
+                break
+            }
 
             val item = oldMessages.optJSONObject(index) ?: continue
             updatedMessages.put(item)
@@ -60,18 +61,22 @@ object IncomingSmsStore {
         )
 
         val messages = try {
-            JSONArray(preferences.getString(KEY_MESSAGES, "[]"))
+            JSONArray(preferences.getString(KEY_MESSAGES, "[]") ?: "[]")
         } catch (_: Exception) {
             JSONArray()
         }
 
         return buildList {
             for (index in 0 until messages.length()) {
-                messages.optJSONObject(index)?.let { add(it) }
+                val item = messages.optJSONObject(index)
+                if (item != null) {
+                    add(item)
+                }
             }
         }
     }
 
+    @Synchronized
     fun clear(context: Context) {
         context.getSharedPreferences(
             PREFS_NAME,
@@ -81,4 +86,3 @@ object IncomingSmsStore {
             .apply()
     }
 }
-```
