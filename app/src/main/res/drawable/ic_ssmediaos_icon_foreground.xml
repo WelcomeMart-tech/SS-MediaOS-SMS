@@ -1,1 +1,46 @@
 
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- SMS bubble -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M23,27 Q23,22 28,22 L80,22 Q85,22 85,27 L85,56 Q85,61 80,61 L51,61 L38,72 L40,61 L28,61 Q23,61 23,56 Z" />
+
+    <!-- Blue message line -->
+    <path
+        android:fillColor="#1877F2"
+        android:pathData="M32,31 L76,31 L76,36 L32,36 Z" />
+
+    <!-- Message dots -->
+    <path
+        android:fillColor="#1877F2"
+        android:pathData="M38,48 A4,4 0,1 0,38 40 A4,4 0,1 0,38 48 Z" />
+
+    <path
+        android:fillColor="#1877F2"
+        android:pathData="M54,48 A4,4 0,1 0,54 40 A4,4 0,1 0,54 48 Z" />
+
+    <path
+        android:fillColor="#1877F2"
+        android:pathData="M70,48 A4,4 0,1 0,70 40 A4,4 0,1 0,70 48 Z" />
+
+    <!-- Green gateway bars -->
+    <path
+        android:fillColor="#22C55E"
+        android:pathData="M36,80 L44,80 L44,89 L36,89 Z" />
+
+    <path
+        android:fillColor="#22C55E"
+        android:pathData="M50,75 L58,75 L58,89 L50,89 Z" />
+
+    <path
+        android:fillColor="#22C55E"
+        android:pathData="M64,70 L72,70 L72,89 L64,89 Z" />
+
+</vector>
+
