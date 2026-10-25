@@ -308,20 +308,20 @@ class MainActivity : Activity() {
             )
         )
 
-        val inboxCard = createCard()
+        val smsCard = createCard()
 
-        inboxCard.addView(
+        smsCard.addView(
             textView(
-                "Incoming SMS Inbox",
+                "SMS Gateway",
                 17f,
                 textDark,
                 true
             )
         )
 
-        inboxCard.addView(
+        smsCard.addView(
             textView(
-                "Open and review received SMS messages.",
+                "Use the authorized gateway to send business messages. This app does not access your incoming SMS inbox.",
                 13f,
                 textMuted,
                 false
@@ -330,26 +330,8 @@ class MainActivity : Activity() {
             }
         )
 
-        inboxCard.addView(
-            actionButton("Open SMS Inbox", blue) {
-                try {
-                    startActivity(
-                        Intent(
-                            this@MainActivity,
-                            SmsInboxActivity::class.java
-                        )
-                    )
-                } catch (e: Exception) {
-                    showToast(
-                        "Could not open SMS Inbox: ${e.localizedMessage}"
-                    )
-                }
-            },
-            buttonLayout()
-        )
-
         content.addView(
-            inboxCard,
+            smsCard,
             LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
@@ -370,7 +352,7 @@ class MainActivity : Activity() {
 
         settingsCard.addView(
             textView(
-                "Server URL, API Token and Device ID",
+                "Server URL, Device Code and Activation Token",
                 16f,
                 textDark,
                 true
@@ -379,7 +361,7 @@ class MainActivity : Activity() {
 
         settingsCard.addView(
             textView(
-                "Save connection details and run a basic server reachability test.",
+                "Configure the SS MediaOS server and activate this device before sending SMS.",
                 13f,
                 textMuted,
                 false
@@ -682,9 +664,7 @@ class MainActivity : Activity() {
 
     private fun requestRequiredPermissions() {
         val required = mutableListOf(
-            Manifest.permission.SEND_SMS,
-            Manifest.permission.RECEIVE_SMS,
-            Manifest.permission.READ_SMS
+            Manifest.permission.SEND_SMS
         )
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
