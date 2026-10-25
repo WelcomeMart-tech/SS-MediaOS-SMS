@@ -21,8 +21,6 @@ class SmsSentReceiver : BroadcastReceiver() {
 
         Log.i(TAG, "SMS send result: $result")
 
-        // The gateway can later forward this result to its configured server.
-        // Do not log phone numbers or message contents here.
         val resultIntent = Intent(ACTION_SMS_RESULT).apply {
             setPackage(context.packageName)
             putExtra(EXTRA_RESULT, result)
