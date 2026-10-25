@@ -1,4 +1,3 @@
-
 package com.ssmediaos.smsgateway
 
 import android.app.Activity
@@ -9,6 +8,7 @@ import android.widget.EditText
 import android.widget.TextView
 import android.widget.Toast
 import java.net.HttpURLConnection
+import java.net.URI
 import java.net.URL
 import kotlin.concurrent.thread
 
@@ -21,11 +21,15 @@ class GatewaySettingsActivity : Activity() {
     private lateinit var saveSettingsButton: Button
     private lateinit var testConnectionButton: Button
 
+    @Volatile
+    private var connectionTestRunning = false
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_gateway_settings)
 
         bindViews()
+        configureFieldLabels()
         loadSavedSettings()
         setupListeners()
     }
@@ -34,9 +38,21 @@ class GatewaySettingsActivity : Activity() {
         serverUrlInput = findViewById(R.id.serverUrlInput)
         apiTokenInput = findViewById(R.id.apiTokenInput)
         deviceIdInput = findViewById(R.id.deviceIdInput)
-        connectionStatusText = findViewById(R.id.connectionStatusText)
-        saveSettingsButton = findViewById(R.id.saveSettingsButton)
-        testConnectionButton = findViewById(R.id.testConnectionButton)
+        connectionStatusText =
+            findViewById(R.id.connectionStatusText)
+        saveSettingsButton =
+            findViewById(R.id.saveSettingsButton)
+        testConnectionButton =
+            findViewById(R.id.testConnectionButton)
+    }
+
+    private fun configureFieldLabels() {
+        serverUrlInput.hint = "HTTPS Server URL"
+        deviceIdInput.hint = "SS MediaOS Device Code"
+        apiTokenInput.hint = "Activation Token"
+
+        apiTokenInput.transformationMethod =
+            android.text.method.PasswordTransformationMethod.getInstance()
     }
 
     private fun loadSavedSettings() {
@@ -45,14 +61,15 @@ class GatewaySettingsActivity : Activity() {
         )
 
         apiTokenInput.setText(
-            SecureConfig.getApiToken(this).orEmpty()
+            SecureConfig.getActivationToken(this).orEmpty()
         )
 
         deviceIdInput.setText(
-            SecureConfig.getDeviceId(this).orEmpty()
+            SecureConfig.getDeviceCode(this).orEmpty()
         )
 
-        connectionStatusText.text = "Enter your server details and save settings."
+        connectionStatusText.text =
+            "Enter the HTTPS server URL, Device Code and Activation Token."
     }
 
     private fun setupListeners() {
@@ -67,48 +84,50 @@ class GatewaySettingsActivity : Activity() {
 
     private fun saveSettings(): Boolean {
         val serverUrl = serverUrlInput.text.toString().trim()
-        val apiToken = apiTokenInput.text.toString().trim()
-        val deviceId = deviceIdInput.text.toString().trim()
+        val activationToken = apiTokenInput.text.toString().trim()
+        val deviceCode = deviceIdInput.text.toString().trim()
 
-        if (serverUrl.isBlank()) {
-            serverUrlInput.error = "Enter Server URL"
+        if (!isValidHttpsUrl(serverUrl)) {
+            serverUrlInput.error =
+                "Enter a valid HTTPS server URL"
             serverUrlInput.requestFocus()
             return false
         }
 
-        if (apiToken.isBlank()) {
-            apiTokenInput.error = "Enter API Token"
-            apiTokenInput.requestFocus()
-            return false
-        }
-
-        if (deviceId.isBlank()) {
-            deviceIdInput.error = "Enter Device ID"
+        if (deviceCode.isBlank()) {
+            deviceIdInput.error = "Enter Device Code"
             deviceIdInput.requestFocus()
             return false
         }
 
-        val saved = SecureConfig.saveSettings(
+        if (activationToken.isBlank()) {
+            apiTokenInput.error = "Enter Activation Token"
+            apiTokenInput.requestFocus()
+            return false
+        }
+
+        val saved = SecureConfig.saveActivationSettings(
             context = this,
             serverUrl = serverUrl,
-            apiToken = apiToken,
-            deviceId = deviceId
+            deviceCode = deviceCode,
+            activationToken = activationToken
         )
 
         if (!saved) {
             connectionStatusText.text =
-                "Could not save settings. Check the Server URL and try again."
+                "Settings could not be saved. Check the entered values."
 
             Toast.makeText(
                 this,
-                "Invalid settings. Check Server URL, API Token and Device ID.",
+                "Could not save gateway settings.",
                 Toast.LENGTH_LONG
             ).show()
 
             return false
         }
 
-        connectionStatusText.text = "Settings saved successfully."
+        connectionStatusText.text =
+            "Settings saved. Server-side activation has not yet been verified."
 
         Toast.makeText(
             this,
@@ -120,34 +139,34 @@ class GatewaySettingsActivity : Activity() {
     }
 
     private fun testServerConnection() {
-        val serverUrl = serverUrlInput.text.toString().trim().trimEnd('/')
+        val serverUrl =
+            serverUrlInput.text.toString().trim().trimEnd('/')
 
-        if (serverUrl.isBlank()) {
-            serverUrlInput.error = "Enter Server URL"
+        if (!isValidHttpsUrl(serverUrl)) {
+            serverUrlInput.error =
+                "Enter a valid HTTPS server URL"
             serverUrlInput.requestFocus()
             return
         }
 
-        if (!serverUrl.startsWith("https://", ignoreCase = true) &&
-            !serverUrl.startsWith("http://", ignoreCase = true)
-        ) {
-            serverUrlInput.error = "URL must start with http:// or https://"
-            serverUrlInput.requestFocus()
-            return
-        }
+        if (connectionTestRunning) return
 
-        connectionStatusText.text = "Checking server connection…"
+        connectionTestRunning = true
         testConnectionButton.isEnabled = false
+        connectionStatusText.text = "Checking HTTPS server connection…"
 
-        thread(name = "server-connection-test") {
+        thread(name = "ssmediaos-server-test") {
             var connection: HttpURLConnection? = null
 
             val result = try {
-                connection = URL(serverUrl).openConnection() as HttpURLConnection
+                connection =
+                    URL("$serverUrl/health").openConnection()
+                        as HttpURLConnection
+
                 connection.requestMethod = "GET"
                 connection.connectTimeout = 10000
                 connection.readTimeout = 10000
-                connection.instanceFollowRedirects = true
+                connection.instanceFollowRedirects = false
                 connection.setRequestProperty(
                     "User-Agent",
                     "SS-MediaOS-SMS-Gateway/1.0"
@@ -157,20 +176,23 @@ class GatewaySettingsActivity : Activity() {
 
                 when (responseCode) {
                     in 200..299 ->
-                        "Server is reachable. HTTP $responseCode"
+                        "Server health endpoint responded successfully (HTTP $responseCode)."
+
+                    301, 302, 307, 308 ->
+                        "Server redirected the request. Configure the final HTTPS URL directly."
 
                     401, 403 ->
-                        "Server is reachable, but access was denied (HTTP $responseCode). API authentication needs checking."
+                        "Server is reachable, but access was denied (HTTP $responseCode)."
 
                     404 ->
-                        "Server is reachable, but the base path returned HTTP 404. Check the server URL or API endpoint."
+                        "Server is reachable, but /health was not found (HTTP 404)."
 
                     else ->
                         "Server responded with HTTP $responseCode."
                 }
             } catch (e: Exception) {
                 "Connection failed: ${
-                    e.localizedMessage ?: "Check URL, internet and server"
+                    e.localizedMessage ?: "Check internet and server URL."
                 }"
             } finally {
                 connection?.disconnect()
@@ -179,8 +201,30 @@ class GatewaySettingsActivity : Activity() {
             runOnUiThread {
                 connectionStatusText.text = result
                 testConnectionButton.isEnabled = true
+                connectionTestRunning = false
             }
         }
     }
-}
 
+    private fun isValidHttpsUrl(value: String): Boolean {
+        if (value.isBlank()) return false
+
+        return try {
+            val uri = URI(value)
+
+            uri.scheme.equals("https", ignoreCase = true) &&
+                !uri.host.isNullOrBlank() &&
+                uri.userInfo == null &&
+                uri.rawQuery == null &&
+                uri.rawFragment == null
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        // The connection has timeouts; no Activity reference is
+        // accessed from the worker thread until runOnUiThread.
+    }
+}
