@@ -26,4 +26,3 @@ object AppContextHolder {
         appContext = context.applicationContext
     }
 }
-
