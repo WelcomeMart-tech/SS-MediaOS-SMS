@@ -2,278 +2,879 @@ package com.ssmediaos.smsgateway
 
 import android.Manifest
 import android.app.Activity
-import android.app.AlertDialog
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.net.Uri
+import android.graphics.Color
+import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.Bundle
-import android.provider.Settings
 import android.view.Gravity
 import android.view.ViewGroup
 import android.widget.Button
-import android.widget.EditText
 import android.widget.LinearLayout
-import android.widget.ImageView
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 
 class MainActivity : Activity() {
-    private lateinit var baseUrl: EditText
-    private lateinit var deviceCode: EditText
-    private lateinit var token: EditText
-    private lateinit var status: TextView
-    private lateinit var startButton: Button
-    private var waitingForSettingsPermission = false
+
+    private lateinit var statusText: TextView
+    private lateinit var serverText: TextView
+    private lateinit var permissionText: TextView
+    private lateinit var gatewayText: TextView
+    private lateinit var content: LinearLayout
+
+    private var gatewayStartRequested = false
+
+    private val navy = Color.rgb(16, 27, 53)
+    private val blue = Color.rgb(24, 119, 242)
+    private val green = Color.rgb(34, 197, 94)
+    private val backgroundColor = Color.rgb(244, 247, 252)
+    private val textDark = Color.rgb(30, 41, 59)
+    private val textMuted = Color.rgb(100, 116, 139)
+    private val white = Color.WHITE
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        buildUi()
-        SecureConfig.load(this)?.let {
-            baseUrl.setText(it.optString("baseUrl"))
-            deviceCode.setText(it.optString("deviceCode"))
-            token.setText(it.optString("token"))
-            status.text = "Configuration saved. SMS service is not necessarily running."
-        }
-    }
 
-    private fun buildUi() {
-        val outer = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), dp(22), dp(20), dp(20))
-            setBackgroundColor(0xFFF4F7FB.toInt())
-        }
-        val scroll = ScrollView(this)
-        val content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        val brand = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, 0, 0, dp(10))
-        }
-        val logo = ImageView(this).apply {
-            setImageResource(R.drawable.ic_ssmediaos_logo)
-            contentDescription = "SS MediaOS SMS Gateway logo"
-        }
-        brand.addView(logo, LinearLayout.LayoutParams(dp(60), dp(60)))
-        val title = TextView(this).apply {
-            text = "SS MediaOS\nSMS Gateway"
-            textSize = 22f
-            setTextColor(0xFF123B70.toInt())
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(12), 0, 0, 0)
-            setTypeface(null, android.graphics.Typeface.BOLD)
-        }
-        brand.addView(title, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        content.addView(brand)
-        content.addView(label("Connect this phone to your SS MediaOS server"))
-        content.addView(label("Server URL (HTTPS)"))
-        baseUrl = edit("https://your-domain.com", false)
-        content.addView(baseUrl)
-        content.addView(label("Device Code (example: SMS-DEVICE-01)"))
-        deviceCode = edit("SMS-DEVICE-01", false)
-        content.addView(deviceCode)
-        content.addView(label("Device Token (copy from Integrations page)"))
-        token = edit("Paste device token", true)
-        content.addView(token)
-        content.addView(label("Keep this phone powered on, connected to the internet, and with an active SIM. The app sends SMS using your mobile network."))
-        val save = Button(this).apply { text = "Save Configuration"; setOnClickListener { saveConfig() } }
-        content.addView(save, matchWrap())
-        startButton = Button(this).apply { text = "Save & Start SMS Service"; setOnClickListener { saveAndStart() } }
-        content.addView(startButton, matchWrap())
-        content.addView(Button(this).apply {
-            text = "Stop SMS Service"
-            setOnClickListener { stopService(Intent(this@MainActivity, GatewayService::class.java)); status.text = "SMS service stopped" }
-        }, matchWrap())
-        content.addView(Button(this).apply {
-            text = "Clear Saved Credentials"
-            setOnClickListener { stopService(Intent(this@MainActivity, GatewayService::class.java)); SecureConfig.clear(this@MainActivity); baseUrl.text.clear(); deviceCode.text.clear(); token.text.clear(); status.text = "Saved credentials cleared" }
-        }, matchWrap())
-        status = TextView(this).apply {
-            text = "Status: not started"
-            textSize = 15f
-            setTextColor(0xFF263238.toInt())
-            setPadding(0, dp(16), 0, dp(8))
-        }
-        content.addView(status)
-        content.addView(Button(this).apply {
-            text = "Open App Settings / Permission Help"
-            setOnClickListener { openAppSettings() }
-        }, matchWrap())
-        content.addView(label("SMS permission is required to send messages. Notification permission is optional on Android 13+. If Android blocks SMS access, open App info and check whether your device offers an Allow restricted settings option. This app cannot bypass Android or Google Play Protect restrictions."))
-        content.addView(label("For reliable background operation, keep the phone powered on, maintain an active SIM and internet connection, and review battery/background restrictions in your phone settings."))
-        content.addView(Button(this).apply {
-            text = "Privacy Policy"
-            setOnClickListener { showPolicy("Privacy Policy", PRIVACY_POLICY) }
-        }, matchWrap())
-        content.addView(Button(this).apply {
-            text = "Terms & Conditions"
-            setOnClickListener { showPolicy("Terms & Conditions", TERMS_AND_CONDITIONS) }
-        }, matchWrap())
-        content.addView(label("Read the Privacy Policy and Terms & Conditions before enabling SMS sending."))
-        scroll.addView(content)
-        outer.addView(scroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
-        setContentView(outer)
-    }
+        window.statusBarColor = navy
+        window.navigationBarColor = navy
+        window.decorView.systemUiVisibility = 0
 
-    private fun label(value: String) = TextView(this).apply {
-        text = value; textSize = 14f; setTextColor(0xFF37474F.toInt()); setPadding(0, dp(10), 0, dp(5))
-    }
-
-    private fun edit(hintText: String, secret: Boolean) = EditText(this).apply {
-        hint = hintText
-        textSize = 15f
-        setSingleLine(!secret)
-        if (secret) inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
-        setPadding(dp(12), dp(10), dp(12), dp(10))
-        background = getDrawable(android.R.drawable.edit_text)
-    }
-
-    private fun matchWrap() = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) }
-    private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
-
-    private fun showPolicy(title: String, body: String) {
-        val textView = TextView(this).apply {
-            text = body
-            textSize = 15f
-            setTextColor(0xFF263238.toInt())
-            setPadding(dp(20), dp(8), dp(20), dp(8))
-        }
-        val scroll = ScrollView(this).apply { addView(textView) }
-        AlertDialog.Builder(this)
-            .setTitle(title)
-            .setView(scroll)
-            .setPositiveButton("Close", null)
-            .show()
-    }
-
-    private fun saveConfig(): Boolean {
-        val url = baseUrl.text.toString().trim().trimEnd('/')
-        val code = deviceCode.text.toString().trim()
-        val secret = token.text.toString().trim()
-        val parsed = try { Uri.parse(url) } catch (_: Exception) { null }
-        if (parsed == null || parsed.scheme != "https" || parsed.host.isNullOrBlank() || parsed.userInfo != null) {
-            baseUrl.error = "Enter a valid HTTPS server URL"; return false
-        }
-        if (code.isBlank() || code.length > 80) { deviceCode.error = "Enter the registered device code"; return false }
-        if (secret.length < 32 || secret.length > 200) { token.error = "Paste the full device token"; return false }
-        SecureConfig.save(this, url, code, secret)
-        status.text = "Configuration saved securely on this phone."
-        Toast.makeText(this, "Configuration saved", Toast.LENGTH_SHORT).show()
-        return true
-    }
-
-    private fun saveAndStart() {
-        if (!saveConfig()) return
-        if (checkSelfPermission(Manifest.permission.SEND_SMS) != PackageManager.PERMISSION_GRANTED) {
-            // First ask Android normally. If it is denied/restricted, the callback
-            // opens this app's Settings page so the user can review available options.
-            requestPermissions(arrayOf(Manifest.permission.SEND_SMS), 700)
-            return
-        }
-        startGateway()
-    }
-
-    private fun openAppSettings() {
-        waitingForSettingsPermission = true
-        try {
-            startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
-        } catch (_: Exception) {
-            waitingForSettingsPermission = false
-            Toast.makeText(this, "Open Settings → Apps → SS MediaOS SMS Gateway → Permissions", Toast.LENGTH_LONG).show()
-        }
+        createInterface()
+        requestRequiredPermissions()
+        updateStatus()
     }
 
     override fun onResume() {
         super.onResume()
-        // When the user returns from Settings after allowing SMS, start immediately.
-        if (waitingForSettingsPermission) {
-            waitingForSettingsPermission = false
-            if (checkSelfPermission(Manifest.permission.SEND_SMS) == PackageManager.PERMISSION_GRANTED) {
-                startGateway()
+
+        if (::statusText.isInitialized) {
+            updateStatus()
+        }
+    }
+
+    private fun createInterface() {
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(backgroundColor)
+        }
+
+        val scrollView = ScrollView(this).apply {
+            isFillViewport = true
+            clipToPadding = false
+            setPadding(0, 0, 0, dp(16))
+        }
+
+        content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(16), dp(16), dp(24))
+        }
+
+        // Brand header
+        val header = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(20), dp(24), dp(20), dp(22))
+            background = roundedGradient(
+                intArrayOf(
+                    Color.rgb(16, 27, 53),
+                    Color.rgb(23, 59, 112),
+                    Color.rgb(24, 119, 242)
+                ),
+                24
+            )
+            elevation = dp(4).toFloat()
+        }
+
+        val brandRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+
+        // Use the existing vector logo when available.
+        val logo = TextView(this).apply {
+            text = "SMS"
+            textSize = 19f
+            gravity = Gravity.CENTER
+            setTextColor(white)
+            setTypeface(null, Typeface.BOLD)
+            background = roundedBackground(
+                Color.rgb(36, 87, 157),
+                18
+            )
+            contentDescription = "SS MediaOS SMS Gateway logo"
+        }
+
+        brandRow.addView(
+            logo,
+            LinearLayout.LayoutParams(dp(66), dp(66))
+        )
+
+        val brandText = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(14), 0, 0, 0)
+        }
+
+        brandText.addView(
+            textView("SS MediaOS", 22f, white, true)
+        )
+
+        brandText.addView(
+            textView(
+                "SMS GATEWAY",
+                12f,
+                Color.rgb(207, 226, 255),
+                true
+            ).apply {
+                letterSpacing = 0.12f
+                setPadding(0, dp(5), 0, 0)
+            }
+        )
+
+        brandRow.addView(
+            brandText,
+            LinearLayout.LayoutParams(
+                0,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                1f
+            )
+        )
+
+        header.addView(brandRow)
+
+        header.addView(
+            textView(
+                "Smart messaging. Reliable connectivity.",
+                13f,
+                Color.rgb(230, 239, 255),
+                false
+            ).apply {
+                setPadding(0, dp(18), 0, 0)
+            }
+        )
+
+        header.addView(
+            textView("Owner: SS MediaOS", 12f, white, true).apply {
+                setPadding(0, dp(16), 0, 0)
+            }
+        )
+
+        header.addView(
+            textView(
+                "Developer: Shivam Yadav",
+                12f,
+                Color.rgb(220, 232, 255),
+                false
+            ).apply {
+                setPadding(0, dp(5), 0, 0)
+            }
+        )
+
+        content.addView(
+            header,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                bottomMargin = dp(22)
+            }
+        )
+
+        // Dashboard
+        content.addView(
+            sectionTitle(
+                "Dashboard",
+                "Gateway overview and controls"
+            )
+        )
+
+        // Status cards
+        val statusRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+        }
+
+        val appCard = createStatCard(
+            "APP STATUS",
+            "RUNNING",
+            "Application",
+            green
+        )
+
+        val connectionCard = createStatCard(
+            "SERVER",
+            "CHECKING",
+            "Configuration status",
+            blue
+        )
+
+        statusRow.addView(
+            appCard,
+            LinearLayout.LayoutParams(0, dp(120), 1f).apply {
+                marginEnd = dp(7)
+            }
+        )
+
+        statusRow.addView(
+            connectionCard,
+            LinearLayout.LayoutParams(0, dp(120), 1f).apply {
+                marginStart = dp(7)
+            }
+        )
+
+        content.addView(
+            statusRow,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                bottomMargin = dp(14)
+            }
+        )
+
+        val permissionCard = createStatCard(
+            "SMS PERMISSION",
+            "CHECKING",
+            "Android permission",
+            blue
+        )
+
+        content.addView(
+            permissionCard,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(112)
+            ).apply {
+                bottomMargin = dp(22)
+            }
+        )
+
+        // Gateway controls
+        content.addView(
+            sectionTitle(
+                "Gateway Controls",
+                "Manage your SMS gateway"
+            )
+        )
+
+        val gatewayCard = createCard()
+
+        gatewayText = textView(
+            "Gateway service status will appear here.",
+            14f,
+            textDark,
+            true
+        )
+
+        gatewayText.setPadding(0, 0, 0, dp(14))
+        gatewayCard.addView(gatewayText)
+
+        gatewayCard.addView(
+            actionButton(
+                "▶   Start Gateway Service",
+                green
+            ) {
+                startGatewayService()
+            },
+            buttonLayout()
+        )
+
+        gatewayCard.addView(
+            actionButton(
+                "■   Stop Gateway Service",
+                Color.rgb(220, 53, 69)
+            ) {
+                stopGatewayService()
+            },
+            buttonLayout()
+        )
+
+        content.addView(
+            gatewayCard,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                bottomMargin = dp(22)
+            }
+        )
+
+        // SMS services
+        content.addView(
+            sectionTitle(
+                "SMS Services",
+                "Access your SMS tools"
+            )
+        )
+
+        val smsCard = createCard()
+
+        smsCard.addView(
+            textView(
+                "SMS Gateway",
+                17f,
+                textDark,
+                true
+            )
+        )
+
+        smsCard.addView(
+            textView(
+                "Use the authorized gateway to send business messages. This app does not access your incoming SMS inbox.",
+                13f,
+                textMuted,
+                false
+            ).apply {
+                setPadding(0, dp(6), 0, dp(12))
+            }
+        )
+
+        content.addView(
+            smsCard,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                bottomMargin = dp(22)
+            }
+        )
+
+        // Gateway settings
+        content.addView(
+            sectionTitle(
+                "Gateway Settings",
+                "Configure your server and device"
+            )
+        )
+
+        val settingsCard = createCard()
+
+        settingsCard.addView(
+            textView(
+                "Server URL, Device Code and Activation Token",
+                16f,
+                textDark,
+                true
+            )
+        )
+
+        settingsCard.addView(
+            textView(
+                "Configure the SS MediaOS server and activate this device before sending SMS.",
+                13f,
+                textMuted,
+                false
+            ).apply {
+                setPadding(0, dp(7), 0, dp(14))
+            }
+        )
+
+        settingsCard.addView(
+            actionButton(
+                "⚙   Open Gateway Settings",
+                blue
+            ) {
+                openGatewaySettings()
+            },
+            buttonLayout()
+        )
+
+        content.addView(
+            settingsCard,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                bottomMargin = dp(22)
+            }
+        )
+
+        // System information
+        content.addView(
+            sectionTitle(
+                "System Information",
+                "Current device status"
+            )
+        )
+
+        val systemCard = createCard()
+
+        serverText = textView(
+            "Server: Not configured",
+            14f,
+            textDark,
+            false
+        )
+
+        permissionText = textView(
+            "SMS Permission: Checking",
+            14f,
+            textDark,
+            false
+        )
+
+        statusText = textView(
+            "App Status: Running",
+            14f,
+            textDark,
+            false
+        )
+
+        systemCard.addView(serverText)
+
+        systemCard.addView(
+            permissionText.apply {
+                setPadding(0, dp(12), 0, 0)
+            }
+        )
+
+        systemCard.addView(
+            statusText.apply {
+                setPadding(0, dp(12), 0, 0)
+            }
+        )
+
+        systemCard.addView(
+            actionButton(
+                "↻   Refresh Status",
+                blue
+            ) {
+                updateStatus("Status refreshed.")
+            }.apply {
+                setPadding(dp(12), 0, dp(12), 0)
+            },
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(48)
+            ).apply {
+                topMargin = dp(18)
+            }
+        )
+
+        content.addView(
+            systemCard,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                bottomMargin = dp(22)
+            }
+        )
+
+        // Footer
+        val footer = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setPadding(dp(10), dp(18), dp(10), dp(12))
+        }
+
+        footer.addView(
+            textView(
+                "SS MediaOS SMS Gateway",
+                14f,
+                navy,
+                true
+            )
+        )
+
+        footer.addView(
+            textView(
+                "Developed by Shivam Yadav",
+                12f,
+                textMuted,
+                false
+            ).apply {
+                setPadding(0, dp(6), 0, 0)
+            }
+        )
+
+        content.addView(footer)
+
+        scrollView.addView(
+            content,
+            ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+        )
+
+        root.addView(
+            scrollView,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                0,
+                1f
+            )
+        )
+
+        setContentView(root)
+    }
+
+    private fun createStatCard(
+        label: String,
+        value: String,
+        description: String,
+        accent: Int
+    ): LinearLayout {
+        val card = createCard()
+
+        card.addView(
+            textView(
+                label,
+                11f,
+                textMuted,
+                true
+            )
+        )
+
+        val valueText = textView(
+            value,
+            20f,
+            accent,
+            true
+        ).apply {
+            tag = when (label) {
+                "SMS PERMISSION" -> "value_SMS_PERMISSION"
+                else -> "value_$label"
+            }
+            setPadding(0, dp(10), 0, dp(4))
+        }
+
+        card.addView(valueText)
+
+        card.addView(
+            textView(
+                description,
+                12f,
+                textMuted,
+                false
+            )
+        )
+
+        return card
+    }
+
+    private fun sectionTitle(
+        title: String,
+        subtitle: String
+    ): LinearLayout {
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(2), 0, 0, dp(12))
+
+            addView(
+                textView(
+                    title,
+                    20f,
+                    navy,
+                    true
+                )
+            )
+
+            addView(
+                textView(
+                    subtitle,
+                    12f,
+                    textMuted,
+                    false
+                ).apply {
+                    setPadding(0, dp(4), 0, 0)
+                }
+            )
+        }
+    }
+
+    private fun createCard(): LinearLayout {
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18), dp(18), dp(18), dp(18))
+            background = roundedBackground(white, 18)
+            elevation = dp(2).toFloat()
+        }
+    }
+
+    private fun textView(
+        value: String,
+        size: Float,
+        color: Int,
+        bold: Boolean
+    ): TextView {
+        return TextView(this).apply {
+            text = value
+            textSize = size
+            setTextColor(color)
+
+            if (bold) {
+                setTypeface(null, Typeface.BOLD)
+            }
+
+            gravity = Gravity.CENTER_VERTICAL
+        }
+    }
+
+    private fun actionButton(
+        label: String,
+        color: Int,
+        onClick: () -> Unit
+    ): Button {
+        return Button(this).apply {
+            text = label
+            textSize = 14f
+            setTextColor(white)
+            isAllCaps = false
+            background = roundedBackground(color, 12)
+            setPadding(dp(12), dp(6), dp(12), dp(6))
+            setOnClickListener {
+                onClick()
+            }
+        }
+    }
+
+    private fun buttonLayout(): LinearLayout.LayoutParams {
+        return LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            dp(50)
+        ).apply {
+            bottomMargin = dp(10)
+        }
+    }
+
+    private fun roundedBackground(
+        color: Int,
+        radius: Int
+    ): GradientDrawable {
+        return GradientDrawable().apply {
+            setColor(color)
+            cornerRadius = dp(radius).toFloat()
+        }
+    }
+
+    private fun roundedGradient(
+        colors: IntArray,
+        radius: Int
+    ): GradientDrawable {
+        return GradientDrawable(
+            GradientDrawable.Orientation.LEFT_RIGHT,
+            colors
+        ).apply {
+            cornerRadius = dp(radius).toFloat()
+        }
+    }
+
+    private fun requestRequiredPermissions() {
+        val required = mutableListOf(
+            Manifest.permission.SEND_SMS
+        )
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            required.add(Manifest.permission.POST_NOTIFICATIONS)
+        }
+
+        val missing = required.filter {
+            checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED
+        }
+
+        if (missing.isNotEmpty()) {
+            requestPermissions(
+                missing.toTypedArray(),
+                PERMISSION_REQUEST_CODE
+            )
+        }
+    }
+
+    private fun startGatewayService() {
+        val smsGranted =
+            checkSelfPermission(Manifest.permission.SEND_SMS) ==
+                PackageManager.PERMISSION_GRANTED
+
+        if (!smsGranted) {
+            updateStatus("Please grant SMS permission first.")
+            requestRequiredPermissions()
+            return
+        }
+
+        val serverUrl = SecureConfig.getServerUrl(this)
+        val deviceCode = SecureConfig.getDeviceCode(this)
+        val activationToken = SecureConfig.getActivationToken(this)
+        val deviceToken = SecureConfig.getDeviceToken(this)
+
+        if (serverUrl.isNullOrBlank() ||
+            deviceCode.isNullOrBlank() ||
+            activationToken.isNullOrBlank()
+        ) {
+            updateStatus("Complete Gateway Settings before starting the gateway.")
+            showToast("Please save the server URL, Device Code and Activation Token first.")
+            return
+        }
+
+        if (deviceToken.isNullOrBlank()) {
+            updateStatus("This device is not activated yet. Activate it in Gateway Settings.")
+            showToast("Activate this device before starting the gateway.")
+            return
+        }
+
+        try {
+            val intent = Intent(
+                this,
+                GatewayService::class.java
+            ).apply {
+                action = GatewayService.ACTION_START
+            }
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(intent)
             } else {
-                status.text = "SMS permission is still off. In App info, open Permissions and allow SMS if Android offers it. Some Android versions may also show an Allow restricted settings option in the app-info menu."
+                startService(intent)
             }
+
+            gatewayStartRequested = true
+            updateStatus("Gateway service start requested.")
+        } catch (e: Exception) {
+            gatewayStartRequested = false
+            updateStatus(
+                "Could not start service: ${e.localizedMessage}"
+            )
         }
     }
 
-    private fun startGateway() {
-        val config = SecureConfig.load(this)
-        if (config == null) { status.text = "Configuration could not be read. Please save it again."; return }
-        val intent = Intent(this, GatewayService::class.java)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(intent) else startService(intent)
-        status.text = "SMS service started. Check the persistent notification for connection status."
-        Toast.makeText(this, "SMS service started", Toast.LENGTH_LONG).show()
+    private fun stopGatewayService() {
+        val stopped = stopService(
+            Intent(this, GatewayService::class.java)
+        )
+
+        gatewayStartRequested = false
+
+        updateStatus(
+            if (stopped) {
+                "Gateway service stop requested."
+            } else {
+                "Stop requested. Service may already be stopped."
+            }
+        )
     }
 
-    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == 700) {
-            if (permissions.isNotEmpty() && permissions.indices.all { grantResults.getOrNull(it) == PackageManager.PERMISSION_GRANTED }) startGateway()
-            else {
-                status.text = "SMS permission was denied or blocked. Opening App Settings; allow SMS if the option is available, then return here. The service will start automatically once permission is granted."
-                Toast.makeText(this, "Please review SMS permission in App Settings.", Toast.LENGTH_LONG).show()
-                openAppSettings()
-            }
+    private fun openGatewaySettings() {
+        try {
+            startActivity(
+                Intent(
+                    this,
+                    GatewaySettingsActivity::class.java
+                )
+            )
+        } catch (e: Exception) {
+            showToast(
+                "Could not open Gateway Settings. Check AndroidManifest.xml. " +
+                    (e.localizedMessage ?: "")
+            )
         }
     }
+
+    private fun updateStatus(message: String? = null) {
+        val smsGranted =
+            checkSelfPermission(Manifest.permission.SEND_SMS) ==
+                PackageManager.PERMISSION_GRANTED
+
+        val serverUrl = SecureConfig.getServerUrl(this)
+        val deviceCode = SecureConfig.getDeviceCode(this)
+        val activationToken = SecureConfig.getActivationToken(this)
+        val deviceToken = SecureConfig.getDeviceToken(this)
+
+        serverText.text =
+            "Server: ${serverUrl ?: "Not configured"}"
+
+        permissionText.text = if (smsGranted) {
+            "SMS Permission: Granted"
+        } else {
+            "SMS Permission: Not granted"
+        }
+
+        statusText.text = buildString {
+            appendLine("App Status: Running")
+            appendLine(
+                if (smsGranted) {
+                    "SMS sending permission is granted."
+                } else {
+                    "SMS sending permission is required."
+                }
+            )
+
+            if (message != null) {
+                appendLine()
+                append(message)
+            }
+        }
+
+        val serverValue = content.findViewWithTag<TextView>(
+            "value_SERVER"
+        )
+
+        serverValue?.text = when {
+            serverUrl.isNullOrBlank() -> "NOT SET"
+            deviceToken.isNullOrBlank() -> "NOT ACTIVATED"
+            else -> "ACTIVATED"
+        }
+
+        val permissionValue = content.findViewWithTag<TextView>(
+            "value_SMS_PERMISSION"
+        )
+
+        permissionValue?.text = if (smsGranted) {
+            "GRANTED"
+        } else {
+            "NOT GRANTED"
+        }
+
+        gatewayText.text = buildString {
+            appendLine(
+                if (gatewayStartRequested) {
+                    "Gateway start has been requested."
+                } else {
+                    "Gateway service controls"
+                }
+            )
+
+            appendLine(
+                if (smsGranted) {
+                    "SMS permission is available."
+                } else {
+                    "Grant SMS permission before starting the gateway."
+                }
+            )
+
+            appendLine(
+                if (serverUrl.isNullOrBlank()) {
+                    "Server URL is not configured."
+                } else {
+                    "Server URL is configured."
+                }
+            )
+
+            append(
+                when {
+                    deviceCode.isNullOrBlank() || activationToken.isNullOrBlank() ->
+                        "Device Code and Activation Token are not configured."
+                    deviceToken.isNullOrBlank() ->
+                        "Device is not activated. Activate it in Gateway Settings."
+                    else ->
+                        "Device activation token is available."
+                }
+            )
+        }
+    }
+
+    private fun showToast(message: String) {
+        Toast.makeText(
+            this,
+            message,
+            Toast.LENGTH_LONG
+        ).show()
+    }
+
+    private fun dp(value: Int): Int =
+        (value * resources.displayMetrics.density).toInt()
 
     companion object {
-        private const val PRIVACY_POLICY = """SS MediaOS SMS Gateway — Privacy Policy
-
-Last updated: 24 October 2026
-
-1. What this app does
-This app connects a phone to a server you configure and can send SMS jobs received from that server. Only use it with a server and recipients you are authorised to use.
-
-2. Information processed
-You enter a server URL, device code and device token. The app stores this configuration encrypted using Android Keystore-backed encryption. To perform its gateway function, the app communicates with your configured server and may process SMS recipient numbers, message text, delivery/send status, device identifiers you configure, and technical error/status logs. The exact data retained by the server depends on that server's implementation and settings.
-
-3. How information is used
-Information is used to authenticate this device to your configured server, receive SMS jobs, send requested messages, report send results, and troubleshoot connection or delivery problems. The app is configured to require HTTPS server URLs.
-
-4. Sharing and retention
-Data sent to the configured server is shared with the operator of that server. This app does not establish the server operator's retention or deletion practices; contact that operator for details. Your mobile carrier may process SMS metadata and message content under its own terms. Do not enter sensitive information unless you understand and authorise its processing.
-
-5. Permissions
-SMS permission is required for sending SMS. Android may display additional permission or background-operation controls. The app does not bypass Android permission or security controls. You can stop the service and clear saved credentials from the app.
-
-6. Security
-Keep your device token secret, use only a trusted HTTPS server, keep Android updated, and revoke/rotate a token if it may have been exposed. No software or network transmission can be guaranteed completely secure.
-
-7. Children and lawful use
-This app is intended for authorised device/server operators, not for covert messaging or unsolicited bulk messaging. Follow applicable laws, carrier rules and recipient-consent requirements.
-
-8. Changes and contact
-This policy may be updated when the app changes. For privacy requests about server-held data, contact the operator of the configured server. Replace this contact process with your organisation's verified support/privacy contact before public release."""
-
-        private const val TERMS_AND_CONDITIONS = """SS MediaOS SMS Gateway — Terms & Conditions
-
-Last updated: 24 October 2026
-
-1. Acceptance
-By using this app, you agree to these terms. If you do not agree, stop the service and uninstall the app.
-
-2. Authorised use
-You must own or be authorised to administer the phone, SIM, server account and device token. You are responsible for the server URL and for keeping credentials secure.
-
-3. SMS responsibility
-You are responsible for the content, recipient selection, consent, costs, carrier restrictions and legal compliance of all SMS jobs. Do not use the app for spam, harassment, fraud, impersonation, unlawful messaging or messages sent without required permission/consent.
-
-4. Permissions and operation
-The app requires Android SMS permission to send messages. Permission must be granted by the device user through Android's normal controls. Service availability depends on Android version, device manufacturer settings, battery restrictions, network, SIM, carrier and server availability. Continuous operation is not guaranteed.
-
-5. Charges and third parties
-Your carrier may charge for SMS or data. The app does not control carrier networks, Android security decisions, or third-party server uptime and policies.
-
-6. No warranty
-The app is provided on an as-available basis, without a guarantee of uninterrupted service, delivery, compatibility with every device, or fitness for a particular purpose, to the extent permitted by applicable law.
-
-7. Suspension and security
-Stop using the app if you suspect unauthorised access. Rotate/revoke exposed tokens and remove saved credentials. The operator may disable server access for misuse or security reasons.
-
-8. Changes and contact
-These terms may be updated. Add your verified business/legal name, jurisdiction and support contact before distributing this app publicly. Nothing here limits rights that cannot legally be excluded."""
+        private const val PERMISSION_REQUEST_CODE = 1001
     }
-
 }
