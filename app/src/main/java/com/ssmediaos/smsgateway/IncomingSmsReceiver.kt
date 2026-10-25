@@ -1,4 +1,4 @@
-```kotlin
+
 package com.ssmediaos.smsgateway
 
 import android.content.BroadcastReceiver
@@ -21,25 +21,37 @@ class IncomingSmsReceiver : BroadcastReceiver() {
             return
         }
 
-        if (messages.isEmpty()) {
-            return
-        }
+        if (messages.isEmpty()) return
 
         val sender = messages.firstOrNull()?.originatingAddress.orEmpty()
-        val messageBody = messages.joinToString(separator = "") {
+        val body = messages.joinToString(separator = "") {
             it.messageBody.orEmpty()
         }
+        val timestamp = messages.firstOrNull()?.timestampMillis ?: 0L
 
-        Log.i(TAG, "Incoming SMS received from: $sender")
+        try {
+            IncomingSmsStore.save(
+                context = context,
+                sender = sender,
+                message = body,
+                timestamp = timestamp
+            )
 
-        val receivedIntent = Intent(ACTION_INCOMING_SMS).apply {
-            setPackage(context.packageName)
-            putExtra(EXTRA_SENDER, sender)
-            putExtra(EXTRA_MESSAGE, messageBody)
-            putExtra(EXTRA_TIMESTAMP, messages.firstOrNull()?.timestampMillis ?: 0L)
+            Log.i(TAG, "Incoming SMS saved")
+
+            // Notify other components inside this app.
+            val receivedIntent = Intent(ACTION_INCOMING_SMS).apply {
+                setPackage(context.packageName)
+                putExtra(EXTRA_SENDER, sender)
+                putExtra(EXTRA_MESSAGE, body)
+                putExtra(EXTRA_TIMESTAMP, timestamp)
+            }
+
+            context.sendBroadcast(receivedIntent)
+
+        } catch (e: Exception) {
+            Log.e(TAG, "Could not save incoming SMS", e)
         }
-
-        context.sendBroadcast(receivedIntent)
     }
 
     companion object {
@@ -53,4 +65,3 @@ class IncomingSmsReceiver : BroadcastReceiver() {
         const val EXTRA_TIMESTAMP = "incoming_sms_timestamp"
     }
 }
-```
