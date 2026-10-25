@@ -1,50 +1,71 @@
-
 <?xml version="1.0" encoding="utf-8"?>
-<vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="160dp"
-    android:height="160dp"
-    android:viewportWidth="160"
-    android:viewportHeight="160">
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:padding="20dp"
+    android:background="@drawable/bg_brand_card">
 
-    <!-- Logo background -->
-    <path
-        android:fillColor="#172746"
-        android:pathData="M20,0 L140,0 Q160,0 160,20 L160,140 Q160,160 140,160 L20,160 Q0,160 0,140 L0,20 Q0,0 20,0 Z" />
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
 
-    <!-- SMS bubble -->
-    <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M30,34 Q30,26 38,26 L122,26 Q130,26 130,34 L130,83 Q130,91 122,91 L79,91 L57,108 L61,91 L38,91 Q30,91 30,83 Z" />
+        <ImageView
+            android:layout_width="68dp"
+            android:layout_height="68dp"
+            android:contentDescription="@string/app_name"
+            android:src="@drawable/ic_ssmediaos_logo"
+            android:scaleType="fitCenter" />
 
-    <!-- Blue message accent -->
-    <path
-        android:fillColor="#1877F2"
-        android:pathData="M43,40 L117,40 L117,47 L43,47 Z" />
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:layout_marginStart="16dp"
+            android:orientation="vertical">
 
-    <!-- Message dots -->
-    <path
-        android:fillColor="#1877F2"
-        android:pathData="M53,70 A6,6 0,1 0,53 58 A6,6 0,1 0,53 70 Z" />
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/app_name"
+                android:textColor="#FFFFFF"
+                android:textSize="20sp"
+                android:textStyle="bold" />
 
-    <path
-        android:fillColor="#1877F2"
-        android:pathData="M80,70 A6,6 0,1 0,80 58 A6,6 0,1 0,80 70 Z" />
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="5dp"
+                android:text="@string/app_tagline"
+                android:textColor="#DCE8FF"
+                android:textSize="13sp" />
 
-    <path
-        android:fillColor="#1877F2"
-        android:pathData="M107,70 A6,6 0,1 0,107 58 A6,6 0,1 0,107 70 Z" />
+        </LinearLayout>
 
-    <!-- Gateway signal -->
-    <path
-        android:fillColor="#22C55E"
-        android:pathData="M48,119 L61,119 L61,137 L48,137 Z" />
+    </LinearLayout>
 
-    <path
-        android:fillColor="#22C55E"
-        android:pathData="M74,112 L87,112 L87,137 L74,137 Z" />
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:layout_marginTop="18dp"
+        android:layout_marginBottom="12dp"
+        android:background="#66FFFFFF" />
 
-    <path
-        android:fillColor="#22C55E"
-        android:pathData="M100,104 L113,104 L113,137 L100,137 Z" />
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Owner: SS MediaOS"
+        android:textColor="#FFFFFF"
+        android:textSize="14sp" />
 
-</vector>
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="5dp"
+        android:text="Developer: Shivam Yadav"
+        android:textColor="#FFFFFF"
+        android:textSize="14sp" />
+
+</LinearLayout>
