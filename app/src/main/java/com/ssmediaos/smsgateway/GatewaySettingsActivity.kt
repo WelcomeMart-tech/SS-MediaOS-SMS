@@ -1,4 +1,4 @@
-```kotlin
+
 package com.ssmediaos.smsgateway
 
 import android.app.Activity
