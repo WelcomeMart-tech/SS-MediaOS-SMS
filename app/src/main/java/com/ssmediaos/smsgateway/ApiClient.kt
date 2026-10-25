@@ -3,6 +3,7 @@ package com.ssmediaos.smsgateway
 import org.json.JSONObject
 import java.io.IOException
 import java.net.HttpURLConnection
+import java.net.URI
 import java.net.URL
 import java.util.concurrent.Executors
 
@@ -14,16 +15,64 @@ object ApiClient {
     private const val READ_TIMEOUT = 15000
 
     /**
-     * Existing GET method retained for compatibility.
-     * Uses the configured server URL and adds available credentials.
+     * Activate a registered device using the SS MediaOS server.
+     *
+     * Expected request:
+     * POST /v1/device/activate
+     * {
+     *   "deviceCode": "...",
+     *   "activationToken": "..."
+     * }
+     *
+     * Expected response:
+     * {
+     *   "deviceToken": "..."
+     * }
      */
-    fun get(
-        endpoint: String,
+    fun activate(
         callback: (Result<JSONObject>) -> Unit
     ) {
         executor.execute {
             val result = runCatching {
-                request(endpoint)
+                val context = AppContextHolder.context
+
+                val serverUrl = SecureConfig.getServerUrl(context)
+                    ?: throw IOException("Server URL is not configured.")
+
+                val deviceCode = SecureConfig.getDeviceCode(context)
+                    ?: throw IOException("Device Code is not configured.")
+
+                val activationToken =
+                    SecureConfig.getActivationToken(context)
+                        ?: throw IOException("Activation Token is not configured.")
+
+                val response = request(
+                    endpoint = buildEndpoint(
+                        serverUrl,
+                        "/v1/device/activate"
+                    ),
+                    method = "POST",
+                    body = JSONObject()
+                        .put("deviceCode", deviceCode)
+                        .put("activationToken", activationToken)
+                )
+
+                val deviceToken = response.optString("deviceToken")
+                    .trim()
+
+                if (deviceToken.isBlank()) {
+                    throw IOException(
+                        "Activation response did not contain a device token."
+                    )
+                }
+
+                if (!SecureConfig.saveDeviceToken(context, deviceToken)) {
+                    throw IOException(
+                        "Device activated, but its token could not be saved."
+                    )
+                }
+
+                response
             }
 
             callbackSafely(callback, result)
@@ -31,15 +80,10 @@ object ApiClient {
     }
 
     /**
-     * GET request using the saved Server URL, API Token and Device ID.
-     *
-     * endpoint must be a relative API path, for example:
-     * "/api/status"
-     *
-     * The actual endpoint and authentication header names must match
-     * your server implementation.
+     * Existing GET method retained for compatibility.
+     * Use a relative path such as /health.
      */
-    fun getConfigured(
+    fun get(
         endpoint: String,
         callback: (Result<JSONObject>) -> Unit
     ) {
@@ -49,18 +93,9 @@ object ApiClient {
                     AppContextHolder.context
                 ) ?: throw IOException("Server URL is not configured.")
 
-                val token = SecureConfig.getApiToken(
-                    AppContextHolder.context
-                ) ?: throw IOException("API Token is not configured.")
-
-                val deviceId = SecureConfig.getDeviceId(
-                    AppContextHolder.context
-                ) ?: throw IOException("Device ID is not configured.")
-
                 request(
                     endpoint = buildEndpoint(serverUrl, endpoint),
-                    apiToken = token,
-                    deviceId = deviceId
+                    method = "GET"
                 )
             }
 
@@ -69,8 +104,69 @@ object ApiClient {
     }
 
     /**
-     * Explicit-credentials GET method.
-     * Does not depend on global application context.
+     * GET request authenticated using the activated device token.
+     */
+    fun getConfigured(
+        endpoint: String,
+        callback: (Result<JSONObject>) -> Unit
+    ) {
+        executor.execute {
+            val result = runCatching {
+                val context = AppContextHolder.context
+
+                val serverUrl = SecureConfig.getServerUrl(context)
+                    ?: throw IOException("Server URL is not configured.")
+
+                val deviceToken = SecureConfig.getDeviceToken(context)
+                    ?: throw IOException(
+                        "Device is not activated. Activate it first."
+                    )
+
+                request(
+                    endpoint = buildEndpoint(serverUrl, endpoint),
+                    method = "GET",
+                    bearerToken = deviceToken
+                )
+            }
+
+            callbackSafely(callback, result)
+        }
+    }
+
+    /**
+     * Authenticated POST request using the activated device token.
+     */
+    fun postConfigured(
+        endpoint: String,
+        body: JSONObject,
+        callback: (Result<JSONObject>) -> Unit
+    ) {
+        executor.execute {
+            val result = runCatching {
+                val context = AppContextHolder.context
+
+                val serverUrl = SecureConfig.getServerUrl(context)
+                    ?: throw IOException("Server URL is not configured.")
+
+                val deviceToken = SecureConfig.getDeviceToken(context)
+                    ?: throw IOException(
+                        "Device is not activated. Activate it first."
+                    )
+
+                request(
+                    endpoint = buildEndpoint(serverUrl, endpoint),
+                    method = "POST",
+                    bearerToken = deviceToken,
+                    body = body
+                )
+            }
+
+            callbackSafely(callback, result)
+        }
+    }
+
+    /**
+     * Existing explicit-credentials GET method retained.
      */
     fun get(
         endpoint: String,
@@ -82,7 +178,8 @@ object ApiClient {
             val result = runCatching {
                 request(
                     endpoint = endpoint,
-                    apiToken = apiToken,
+                    method = "GET",
+                    bearerToken = apiToken,
                     deviceId = deviceId
                 )
             }
@@ -93,8 +190,10 @@ object ApiClient {
 
     private fun request(
         endpoint: String,
-        apiToken: String? = null,
-        deviceId: String? = null
+        method: String,
+        bearerToken: String? = null,
+        deviceId: String? = null,
+        body: JSONObject? = null
     ): JSONObject {
         val parsedUrl = try {
             URL(endpoint)
@@ -102,32 +201,47 @@ object ApiClient {
             throw IOException("Invalid API URL.", e)
         }
 
-        require(
-            parsedUrl.protocol.equals("https", ignoreCase = true)
-        ) {
-            "Use a valid HTTPS API URL."
+        if (!parsedUrl.protocol.equals("https", ignoreCase = true)) {
+            throw IOException("HTTPS is required for API requests.")
         }
 
-        val connection = (parsedUrl.openConnection() as HttpURLConnection).apply {
-            requestMethod = "GET"
+        val connection = (
+            parsedUrl.openConnection() as HttpURLConnection
+        ).apply {
+            requestMethod = method
             connectTimeout = CONNECT_TIMEOUT
             readTimeout = READ_TIMEOUT
             instanceFollowRedirects = false
 
             setRequestProperty("Accept", "application/json")
 
-            if (!apiToken.isNullOrBlank()) {
-                // Confirm this header format with your server API.
-                setRequestProperty("Authorization", "Bearer $apiToken")
+            if (!bearerToken.isNullOrBlank()) {
+                setRequestProperty(
+                    "Authorization",
+                    "Bearer $bearerToken"
+                )
             }
 
             if (!deviceId.isNullOrBlank()) {
-                // Confirm this header name with your server API.
                 setRequestProperty("X-Device-ID", deviceId)
+            }
+
+            if (body != null) {
+                doOutput = true
+                setRequestProperty(
+                    "Content-Type",
+                    "application/json; charset=utf-8"
+                )
             }
         }
 
         try {
+            if (body != null) {
+                connection.outputStream.bufferedWriter(Charsets.UTF_8).use {
+                    it.write(body.toString())
+                }
+            }
+
             val responseCode = connection.responseCode
 
             val stream = if (responseCode in 200..299) {
@@ -142,9 +256,10 @@ object ApiClient {
 
             if (responseCode !in 200..299) {
                 val serverMessage = try {
-                    JSONObject(responseBody).optString(
+                    val json = JSONObject(responseBody)
+                    json.optString(
                         "message",
-                        JSONObject(responseBody).optString("error", "")
+                        json.optString("error", "")
                     )
                 } catch (_: Exception) {
                     ""
@@ -156,7 +271,9 @@ object ApiClient {
                     ""
                 }
 
-                throw IOException("Server returned HTTP $responseCode$detail")
+                throw IOException(
+                    "Server returned HTTP $responseCode$detail"
+                )
             }
 
             if (responseBody.isBlank()) {
@@ -186,21 +303,35 @@ object ApiClient {
             "API endpoint cannot be empty."
         }
 
-        require(!path.startsWith("//")) {
+        require(
+            !path.startsWith("//") &&
+                !path.contains('\\')
+        ) {
             "Invalid API endpoint."
         }
 
-        val base = serverUrl.trim().trimEnd('/')
-
-        return if (path.startsWith("https://", true)) {
-            path
-        } else {
-            require(!path.startsWith("http://", true)) {
-                "Use HTTPS for API requests."
-            }
-
-            "$base/${path.trimStart('/')}"
+        // Only allow relative API paths to prevent sending credentials
+        // to a different host.
+        require(
+            !path.startsWith("https://", ignoreCase = true) &&
+                !path.startsWith("http://", ignoreCase = true)
+        ) {
+            "Provide a relative API path, not a full URL."
         }
+
+        val base = URI(serverUrl.trim().trimEnd('/'))
+
+        require(
+            base.scheme.equals("https", ignoreCase = true) &&
+                !base.host.isNullOrBlank() &&
+                base.userInfo == null &&
+                base.rawQuery == null &&
+                base.rawFragment == null
+        ) {
+            "Invalid HTTPS server URL."
+        }
+
+        return "${base.toASCIIString()}/${path.trimStart('/')}"
     }
 
     private fun <T> callbackSafely(
@@ -210,7 +341,7 @@ object ApiClient {
         try {
             callback(result)
         } catch (_: Exception) {
-            // Prevent callback exceptions from terminating the worker.
+            // Keep callback errors from terminating the worker.
         }
     }
 }
