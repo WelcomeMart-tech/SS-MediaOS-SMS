@@ -15,4 +15,5 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "SSMediaOSAndroidGateway"
+
 include(":app")
