@@ -1,12 +1,13 @@
+
 package com.ssmediaos.smsgateway
 
 import android.Manifest
 import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Color
 import android.os.Build
 import android.os.Bundle
-import android.graphics.Color
 import android.view.Gravity
 import android.view.ViewGroup
 import android.widget.Button
@@ -46,12 +47,22 @@ class MainActivity : Activity() {
             textSize = 15f
             setTextColor(Color.DKGRAY)
             gravity = Gravity.CENTER
+            setPadding(0, dp(8), 0, dp(20))
         }
 
         statusText = TextView(this).apply {
             textSize = 16f
             setTextColor(Color.rgb(40, 60, 80))
-            setPadding(0, dp(24), 0, dp(24))
+            setPadding(0, dp(12), 0, dp(20))
+        }
+
+        val inboxButton = Button(this).apply {
+            text = "Incoming SMS Inbox"
+            setOnClickListener {
+                startActivity(
+                    Intent(this@MainActivity, SmsInboxActivity::class.java)
+                )
+            }
         }
 
         val startButton = Button(this).apply {
@@ -64,7 +75,9 @@ class MainActivity : Activity() {
         val stopButton = Button(this).apply {
             text = "Stop Gateway Service"
             setOnClickListener {
-                stopService(Intent(this@MainActivity, GatewayService::class.java))
+                stopService(
+                    Intent(this@MainActivity, GatewayService::class.java)
+                )
                 updateStatus("Gateway service stopped.")
             }
         }
@@ -79,6 +92,7 @@ class MainActivity : Activity() {
         content.addView(title, matchWidth())
         content.addView(subtitle, matchWidth())
         content.addView(statusText, matchWidth())
+        content.addView(inboxButton, matchWidth())
         content.addView(startButton, matchWidth())
         content.addView(stopButton, matchWidth())
         content.addView(refreshButton, matchWidth())
@@ -104,7 +118,10 @@ class MainActivity : Activity() {
         }
 
         if (missing.isNotEmpty()) {
-            requestPermissions(missing.toTypedArray(), PERMISSION_REQUEST_CODE)
+            requestPermissions(
+                missing.toTypedArray(),
+                PERMISSION_REQUEST_CODE
+            )
         }
     }
 
@@ -119,9 +136,9 @@ class MainActivity : Activity() {
             return
         }
 
-        val intent = Intent(this, GatewayService::class.java)
-
         try {
+            val intent = Intent(this, GatewayService::class.java)
+
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 startForegroundService(intent)
             } else {
@@ -129,8 +146,8 @@ class MainActivity : Activity() {
             }
 
             updateStatus("Gateway service start requested.")
-        } catch (exception: Exception) {
-            updateStatus("Could not start service: ${exception.message}")
+        } catch (e: Exception) {
+            updateStatus("Could not start service: ${e.message}")
         }
     }
 
@@ -143,13 +160,21 @@ class MainActivity : Activity() {
             appendLine("App Status: Running")
             appendLine()
             appendLine(
-                if (smsGranted) "SMS Permission: Granted"
-                else "SMS Permission: Not granted"
+                if (smsGranted) {
+                    "SMS Permission: Granted"
+                } else {
+                    "SMS Permission: Not granted"
+                }
             )
             appendLine()
-            appendLine("Server: ${SecureConfig.getServerUrl(this@MainActivity) ?: "Not configured"}")
+            appendLine(
+                "Server: ${
+                    SecureConfig.getServerUrl(this@MainActivity)
+                        ?: "Not configured"
+                }"
+            )
             appendLine()
-            appendLine("Gateway service: Check Android notification/status")
+            appendLine("Gateway service: Check its notification.")
             if (message != null) {
                 appendLine()
                 append(message)
