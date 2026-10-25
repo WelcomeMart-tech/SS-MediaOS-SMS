@@ -1,1 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <string name="app_name">SS MediaOS SMS Gateway</string>
+    <string name="app_owner">SS MediaOS</string>
+    <string name="app_developer">Shivam Yadav</string>
+    <string name="app_tagline">Smart SMS Gateway</string>
+
+</resources>
 
