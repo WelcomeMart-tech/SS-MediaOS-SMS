@@ -1,14 +1,21 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- Network Permission -->
+    <!-- Network access -->
     <uses-permission android:name="android.permission.INTERNET" />
 
-    <!-- Only send SMS; do not read incoming or personal SMS -->
+    <!-- Send SMS only; do not read incoming or personal SMS -->
     <uses-permission android:name="android.permission.SEND_SMS" />
 
-    <!-- Notifications -->
+    <!-- Notifications on Android 13+ -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- Foreground service -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+
+    <!-- Required when targeting Android 14+ and using dataSync FGS type -->
+    <uses-permission
+        android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
 
     <application
         android:name=".GatewayApplication"
@@ -42,7 +49,8 @@
         <service
             android:name=".GatewayService"
             android:exported="false"
-            android:stopWithTask="false" />
+            android:stopWithTask="false"
+            android:foregroundServiceType="dataSync" />
 
         <!-- SMS Sent Receiver -->
         <receiver
