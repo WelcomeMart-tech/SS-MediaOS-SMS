@@ -1,4 +1,4 @@
-```kotlin
+
 package com.ssmediaos.smsgateway
 
 import android.content.Context
@@ -119,4 +119,4 @@ object SecureConfig {
         }
     }
 }
-```
+
