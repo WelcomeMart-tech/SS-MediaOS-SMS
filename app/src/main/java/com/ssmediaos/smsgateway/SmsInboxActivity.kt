@@ -1,4 +1,4 @@
-```kotlin
+
 package com.ssmediaos.smsgateway
 
 import android.app.Activity
@@ -164,4 +164,3 @@ class SmsInboxActivity : Activity() {
         ViewGroup.LayoutParams.WRAP_CONTENT
     )
 }
-```
