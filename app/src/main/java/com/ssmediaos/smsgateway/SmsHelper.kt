@@ -1,4 +1,4 @@
-```kotlin
+
 package com.ssmediaos.smsgateway
 
 import android.Manifest
@@ -128,4 +128,4 @@ object SmsHelper {
         )
     }
 }
-```
+
