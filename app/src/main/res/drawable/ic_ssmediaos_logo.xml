@@ -1,1 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="512dp"
+    android:height="512dp"
+    android:viewportWidth="512"
+    android:viewportHeight="512">
 
+    <!-- Premium dark background -->
+    <path
+        android:fillColor="#101B35"
+        android:pathData="M80,16 L432,16 Q496,16 496,80 L496,432 Q496,496 432,496 L80,496 Q16,496 16,432 L16,80 Q16,16 80,16 Z" />
+
+    <!-- Main message bubble -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M112,116 Q112,88 140,88 L372,88 Q400,88 400,116 L400,284 Q400,312 372,312 L240,312 L168,372 L180,312 L140,312 Q112,312 112,284 Z" />
+
+    <!-- Blue message accent -->
+    <path
+        android:fillColor="#1877F2"
+        android:pathData="M144,132 L368,132 L368,152 L144,152 Z" />
+
+    <!-- SMS indicator dots -->
+    <path
+        android:fillColor="#1877F2"
+        android:pathData="M168,194 A16,16 0,1 0,168 162 A16,16 0,1 0,168 194 Z" />
+
+    <path
+        android:fillColor="#1877F2"
+        android:pathData="M256,194 A16,16 0,1 0,256 162 A16,16 0,1 0,256 194 Z" />
+
+    <path
+        android:fillColor="#1877F2"
+        android:pathData="M344,194 A16,16 0,1 0,344 162 A16,16 0,1 0,344 194 Z" />
+
+    <!-- Connection signal -->
+    <path
+        android:fillColor="#22C55E"
+        android:pathData="M218,346 L242,346 L242,382 L218,382 Z" />
+
+    <path
+        android:fillColor="#22C55E"
+        android:pathData="M258,328 L282,328 L282,382 L258,382 Z" />
+
+    <path
+        android:fillColor="#22C55E"
+        android:pathData="M298,306 L322,306 L322,382 L298,382 Z" />
+
+    <!-- Bottom brand accent -->
+    <path
+        android:fillColor="#1877F2"
+        android:pathData="M112,408 L400,408 L400,428 L112,428 Z" />
+
+</vector>
