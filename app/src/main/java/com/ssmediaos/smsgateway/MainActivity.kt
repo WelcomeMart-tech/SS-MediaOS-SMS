@@ -694,11 +694,33 @@ class MainActivity : Activity() {
             return
         }
 
+        val serverUrl = SecureConfig.getServerUrl(this)
+        val deviceCode = SecureConfig.getDeviceCode(this)
+        val activationToken = SecureConfig.getActivationToken(this)
+        val deviceToken = SecureConfig.getDeviceToken(this)
+
+        if (serverUrl.isNullOrBlank() ||
+            deviceCode.isNullOrBlank() ||
+            activationToken.isNullOrBlank()
+        ) {
+            updateStatus("Complete Gateway Settings before starting the gateway.")
+            showToast("Please save the server URL, Device Code and Activation Token first.")
+            return
+        }
+
+        if (deviceToken.isNullOrBlank()) {
+            updateStatus("This device is not activated yet. Activate it in Gateway Settings.")
+            showToast("Activate this device before starting the gateway.")
+            return
+        }
+
         try {
             val intent = Intent(
                 this,
                 GatewayService::class.java
-            )
+            ).apply {
+                action = GatewayService.ACTION_START
+            }
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 startForegroundService(intent)
@@ -754,8 +776,9 @@ class MainActivity : Activity() {
                 PackageManager.PERMISSION_GRANTED
 
         val serverUrl = SecureConfig.getServerUrl(this)
-        val deviceId = SecureConfig.getDeviceId(this)
-        val apiToken = SecureConfig.getApiToken(this)
+        val deviceCode = SecureConfig.getDeviceCode(this)
+        val activationToken = SecureConfig.getActivationToken(this)
+        val deviceToken = SecureConfig.getDeviceToken(this)
 
         serverText.text =
             "Server: ${serverUrl ?: "Not configured"}"
@@ -786,10 +809,10 @@ class MainActivity : Activity() {
             "value_SERVER"
         )
 
-        serverValue?.text = if (serverUrl.isNullOrBlank()) {
-            "NOT SET"
-        } else {
-            "CONFIGURED"
+        serverValue?.text = when {
+            serverUrl.isNullOrBlank() -> "NOT SET"
+            deviceToken.isNullOrBlank() -> "NOT ACTIVATED"
+            else -> "ACTIVATED"
         }
 
         val permissionValue = content.findViewWithTag<TextView>(
@@ -828,10 +851,13 @@ class MainActivity : Activity() {
             )
 
             append(
-                if (deviceId.isNullOrBlank() || apiToken.isNullOrBlank()) {
-                    "Complete Gateway Settings before API integration."
-                } else {
-                    "Device ID and API Token are configured."
+                when {
+                    deviceCode.isNullOrBlank() || activationToken.isNullOrBlank() ->
+                        "Device Code and Activation Token are not configured."
+                    deviceToken.isNullOrBlank() ->
+                        "Device is not activated. Activate it in Gateway Settings."
+                    else ->
+                        "Device activation token is available."
                 }
             )
         }
