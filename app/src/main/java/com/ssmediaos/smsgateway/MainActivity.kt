@@ -1,4 +1,4 @@
-```kotlin
+
 package com.ssmediaos.smsgateway
 
 import android.Manifest
@@ -702,4 +702,3 @@ class MainActivity : Activity() {
         private const val PERMISSION_REQUEST_CODE = 1001
     }
 }
-```
