@@ -10,6 +10,9 @@
 
     <application
         android:allowBackup="false"
+        android:icon="@mipmap/ic_launcher"
+       android:roundIcon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
         android:label="SS MediaOS SMS Gateway"
         android:supportsRtl="true"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
