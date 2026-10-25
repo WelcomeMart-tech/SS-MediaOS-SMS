@@ -1,1 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
 
+    <!-- Rounded-square background -->
+    <path
+        android:fillColor="#101B35"
+        android:pathData="M0,0 L108,0 L108,108 L0,108 Z" />
+
+    <!-- SMS bubble -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M20,25 Q20,19 26,19 L82,19 Q88,19 88,25 L88,59 Q88,65 82,65 L51,65 L36,77 L39,65 L26,65 Q20,65 20,59 Z" />
+
+    <!-- Blue top accent -->
+    <path
+        android:fillColor="#1877F2"
+        android:pathData="M29,29 L79,29 L79,34 L29,34 Z" />
+
+    <!-- SMS dots -->
+    <path
+        android:fillColor="#1877F2"
+        android:pathData="M36,49 A4,4 0,1 0,36 41 A4,4 0,1 0,36 49 Z" />
+
+    <path
+        android:fillColor="#1877F2"
+        android:pathData="M54,49 A4,4 0,1 0,54 41 A4,4 0,1 0,54 49 Z" />
+
+    <path
+        android:fillColor="#1877F2"
+        android:pathData="M72,49 A4,4 0,1 0,72 41 A4,4 0,1 0,72 49 Z" />
+
+    <!-- Green gateway signal -->
+    <path
+        android:fillColor="#22C55E"
+        android:pathData="M37,82 L45,82 L45,91 L37,91 Z" />
+
+    <path
+        android:fillColor="#22C55E"
+        android:pathData="M50,77 L58,77 L58,91 L50,91 Z" />
+
+    <path
+        android:fillColor="#22C55E"
+        android:pathData="M63,72 L71,72 L71,91 L63,91 Z" />
+
+</vector>
