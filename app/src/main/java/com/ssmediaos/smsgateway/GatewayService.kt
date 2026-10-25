@@ -1,10 +1,13 @@
 package com.ssmediaos.smsgateway
 
+import android.Manifest
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import android.util.Log
@@ -32,61 +35,125 @@ class GatewayService : Service() {
                 return START_NOT_STICKY
             }
 
+            ACTION_START, null -> {
+                startGateway(startId)
+            }
+
             else -> {
-                startGateway()
+                Log.w(TAG, "Unknown service action")
+                stopSelf(startId)
+                return START_NOT_STICKY
             }
         }
 
-        return START_STICKY
+        return if (serviceRunning) {
+            START_STICKY
+        } else {
+            START_NOT_STICKY
+        }
     }
 
-    private fun startGateway() {
+    private fun startGateway(startId: Int) {
         if (serviceRunning) {
             Log.i(TAG, "Gateway is already running")
             return
         }
 
+        // Require saved server and activation details.
+        val serverUrl = SecureConfig.getServerUrl(this)
+        val deviceCode = SecureConfig.getDeviceCode(this)
+        val activationToken = SecureConfig.getActivationToken(this)
+
+        if (
+            serverUrl.isNullOrBlank() ||
+            deviceCode.isNullOrBlank() ||
+            activationToken.isNullOrBlank()
+        ) {
+            Log.w(TAG, "Gateway start blocked: activation settings are missing")
+            stopSelf(startId)
+            return
+        }
+
+        // A saved Device Token is required for an activated session.
+        val deviceToken = SecureConfig.getDeviceToken(this)
+
+        if (deviceToken.isNullOrBlank()) {
+            Log.w(TAG, "Gateway start blocked: device is not activated")
+            stopSelf(startId)
+            return
+        }
+
+        // This service is intended to send SMS, so check permission before
+        // starting the gateway. It does not read incoming SMS.
+        if (
+            checkSelfPermission(Manifest.permission.SEND_SMS) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            Log.w(TAG, "Gateway start blocked: SEND_SMS permission is missing")
+            stopSelf(startId)
+            return
+        }
+
         try {
-            val notification = createNotification()
+            val notification = createNotification(
+                "Gateway is starting"
+            )
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 startForeground(
                     NOTIFICATION_ID,
                     notification,
-                    android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
                 )
             } else {
-                startForeground(NOTIFICATION_ID, notification)
+                startForeground(
+                    NOTIFICATION_ID,
+                    notification
+                )
             }
 
             serviceRunning = true
 
-            Log.i(TAG, "Gateway service started")
-
             updateNotification(
-                "Gateway service is running"
+                "Activated — waiting for gateway processing"
             )
 
+            Log.i(TAG, "Activated gateway service started")
+
             /*
-             * API polling and SMS queue processing have not been
-             * implemented because the server API contract is not
-             * available yet.
+             * IMPORTANT:
+             * Server polling and SMS queue processing are not implemented
+             * in this service yet.
+             *
+             * Do not report queued SMS as sent or delivered.
+             * Implement authenticated API polling and SMS sending separately,
+             * with server-side authorization and proper delivery callbacks.
              */
 
         } catch (exception: Exception) {
             Log.e(TAG, "Unable to start gateway service", exception)
             serviceRunning = false
-            stopForeground(STOP_FOREGROUND_REMOVE)
-            stopSelf()
+
+            try {
+                stopForeground(STOP_FOREGROUND_REMOVE)
+            } catch (stopException: Exception) {
+                Log.w(TAG, "Could not remove foreground notification", stopException)
+            }
+
+            stopSelf(startId)
         }
     }
 
     private fun stopGateway() {
         serviceRunning = false
 
-        stopForeground(STOP_FOREGROUND_REMOVE)
-        stopSelf()
+        try {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+        } catch (exception: Exception) {
+            Log.w(TAG, "Error while stopping foreground service", exception)
+        }
 
+        stopSelf()
         Log.i(TAG, "Gateway service stopped")
     }
 
@@ -109,17 +176,18 @@ class GatewayService : Service() {
         }
     }
 
-    private fun createNotification(): Notification {
-        val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            Notification.Builder(this, CHANNEL_ID)
-        } else {
-            @Suppress("DEPRECATION")
-            Notification.Builder(this)
-        }
+    private fun createNotification(message: String): Notification {
+        val builder =
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                Notification.Builder(this, CHANNEL_ID)
+            } else {
+                @Suppress("DEPRECATION")
+                Notification.Builder(this)
+            }
 
         return builder
             .setContentTitle("SS MediaOS SMS Gateway")
-            .setContentText("Gateway service is running")
+            .setContentText(message)
             .setSmallIcon(android.R.drawable.stat_notify_sync)
             .setOngoing(true)
             .setCategory(Notification.CATEGORY_SERVICE)
@@ -127,33 +195,17 @@ class GatewayService : Service() {
     }
 
     private fun updateNotification(message: String) {
-        val notification = createNotification()
-            .let { original ->
-                val builder =
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                        Notification.Builder(this, CHANNEL_ID)
-                    } else {
-                        @Suppress("DEPRECATION")
-                        Notification.Builder(this)
-                    }
-
-                builder
-                    .setContentTitle("SS MediaOS SMS Gateway")
-                    .setContentText(message)
-                    .setSmallIcon(android.R.drawable.stat_notify_sync)
-                    .setOngoing(true)
-                    .setCategory(Notification.CATEGORY_SERVICE)
-                    .build()
-            }
-
         val manager =
             getSystemService(NotificationManager::class.java)
 
-        manager.notify(NOTIFICATION_ID, notification)
+        manager.notify(
+            NOTIFICATION_ID,
+            createNotification(message)
+        )
     }
 
     override fun onTaskRemoved(rootIntent: Intent?) {
-        Log.i(TAG, "App task removed; service remains configured")
+        Log.i(TAG, "App task removed")
         super.onTaskRemoved(rootIntent)
     }
 
