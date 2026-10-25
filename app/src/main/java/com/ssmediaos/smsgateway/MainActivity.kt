@@ -1,4 +1,3 @@
-
 package com.ssmediaos.smsgateway
 
 import android.Manifest
@@ -11,12 +10,12 @@ import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.Bundle
 import android.view.Gravity
-import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import android.widget.Toast
 
 class MainActivity : Activity() {
 
@@ -26,16 +25,19 @@ class MainActivity : Activity() {
     private lateinit var gatewayText: TextView
     private lateinit var content: LinearLayout
 
+    private var gatewayStartRequested = false
+
     private val navy = Color.rgb(16, 27, 53)
     private val blue = Color.rgb(24, 119, 242)
     private val green = Color.rgb(34, 197, 94)
-    private val background = Color.rgb(244, 247, 252)
+    private val backgroundColor = Color.rgb(244, 247, 252)
     private val textDark = Color.rgb(30, 41, 59)
     private val textMuted = Color.rgb(100, 116, 139)
     private val white = Color.WHITE
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
         window.statusBarColor = navy
         window.navigationBarColor = navy
         window.decorView.systemUiVisibility = 0
@@ -47,6 +49,7 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+
         if (::statusText.isInitialized) {
             updateStatus()
         }
@@ -55,7 +58,7 @@ class MainActivity : Activity() {
     private fun createInterface() {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(background)
+            setBackgroundColor(backgroundColor)
         }
 
         val scrollView = ScrollView(this).apply {
@@ -69,7 +72,7 @@ class MainActivity : Activity() {
             setPadding(dp(16), dp(16), dp(16), dp(24))
         }
 
-        // Premium brand header
+        // Brand header
         val header = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_VERTICAL
@@ -90,14 +93,18 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER_VERTICAL
         }
 
-        // Use the logo created earlier in drawable resources.
+        // Use the existing vector logo when available.
         val logo = TextView(this).apply {
             text = "SMS"
             textSize = 19f
             gravity = Gravity.CENTER
             setTextColor(white)
             setTypeface(null, Typeface.BOLD)
-            background = roundedBackground(Color.rgb(36, 87, 157), 18)
+            background = roundedBackground(
+                Color.rgb(36, 87, 157),
+                18
+            )
+            contentDescription = "SS MediaOS SMS Gateway logo"
         }
 
         brandRow.addView(
@@ -111,12 +118,7 @@ class MainActivity : Activity() {
         }
 
         brandText.addView(
-            textView(
-                "SS MediaOS",
-                22f,
-                white,
-                true
-            )
+            textView("SS MediaOS", 22f, white, true)
         )
 
         brandText.addView(
@@ -133,7 +135,11 @@ class MainActivity : Activity() {
 
         brandRow.addView(
             brandText,
-            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            LinearLayout.LayoutParams(
+                0,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                1f
+            )
         )
 
         header.addView(brandRow)
@@ -150,12 +156,7 @@ class MainActivity : Activity() {
         )
 
         header.addView(
-            textView(
-                "Owner: SS MediaOS",
-                12f,
-                white,
-                true
-            ).apply {
+            textView("Owner: SS MediaOS", 12f, white, true).apply {
                 setPadding(0, dp(16), 0, 0)
             }
         )
@@ -181,9 +182,12 @@ class MainActivity : Activity() {
             }
         )
 
-        // Dashboard title
+        // Dashboard
         content.addView(
-            sectionTitle("Dashboard", "Gateway overview and controls")
+            sectionTitle(
+                "Dashboard",
+                "Gateway overview and controls"
+            )
         )
 
         // Status cards
@@ -201,7 +205,7 @@ class MainActivity : Activity() {
         val connectionCard = createStatCard(
             "SERVER",
             "CHECKING",
-            "Connection",
+            "Configuration status",
             blue
         )
 
@@ -246,9 +250,12 @@ class MainActivity : Activity() {
             }
         )
 
-        // Gateway service section
+        // Gateway controls
         content.addView(
-            sectionTitle("Gateway Controls", "Manage your SMS gateway")
+            sectionTitle(
+                "Gateway Controls",
+                "Manage your SMS gateway"
+            )
         )
 
         val gatewayCard = createCard()
@@ -263,30 +270,23 @@ class MainActivity : Activity() {
         gatewayText.setPadding(0, 0, 0, dp(14))
         gatewayCard.addView(gatewayText)
 
-        val startButton = actionButton(
-            "▶   Start Gateway Service",
-            green
-        ) {
-            startGatewayService()
-        }
-
-        val stopButton = actionButton(
-            "■   Stop Gateway Service",
-            Color.rgb(220, 53, 69)
-        ) {
-            stopService(
-                Intent(this, GatewayService::class.java)
-            )
-            updateStatus("Gateway service stop requested.")
-        }
-
         gatewayCard.addView(
-            startButton,
+            actionButton(
+                "▶   Start Gateway Service",
+                green
+            ) {
+                startGatewayService()
+            },
             buttonLayout()
         )
 
         gatewayCard.addView(
-            stopButton,
+            actionButton(
+                "■   Stop Gateway Service",
+                Color.rgb(220, 53, 69)
+            ) {
+                stopGatewayService()
+            },
             buttonLayout()
         )
 
@@ -300,9 +300,12 @@ class MainActivity : Activity() {
             }
         )
 
-        // SMS services section
+        // SMS services
         content.addView(
-            sectionTitle("SMS Services", "Access your SMS tools")
+            sectionTitle(
+                "SMS Services",
+                "Access your SMS tools"
+            )
         )
 
         val inboxCard = createCard()
@@ -329,9 +332,18 @@ class MainActivity : Activity() {
 
         inboxCard.addView(
             actionButton("Open SMS Inbox", blue) {
-                startActivity(
-                    Intent(this, SmsInboxActivity::class.java)
-                )
+                try {
+                    startActivity(
+                        Intent(
+                            this@MainActivity,
+                            SmsInboxActivity::class.java
+                        )
+                    )
+                } catch (e: Exception) {
+                    showToast(
+                        "Could not open SMS Inbox: ${e.localizedMessage}"
+                    )
+                }
             },
             buttonLayout()
         )
@@ -346,9 +358,62 @@ class MainActivity : Activity() {
             }
         )
 
-        // Server and permissions details
+        // Gateway settings
         content.addView(
-            sectionTitle("System Information", "Current device status")
+            sectionTitle(
+                "Gateway Settings",
+                "Configure your server and device"
+            )
+        )
+
+        val settingsCard = createCard()
+
+        settingsCard.addView(
+            textView(
+                "Server URL, API Token and Device ID",
+                16f,
+                textDark,
+                true
+            )
+        )
+
+        settingsCard.addView(
+            textView(
+                "Save connection details and run a basic server reachability test.",
+                13f,
+                textMuted,
+                false
+            ).apply {
+                setPadding(0, dp(7), 0, dp(14))
+            }
+        )
+
+        settingsCard.addView(
+            actionButton(
+                "⚙   Open Gateway Settings",
+                blue
+            ) {
+                openGatewaySettings()
+            },
+            buttonLayout()
+        )
+
+        content.addView(
+            settingsCard,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                bottomMargin = dp(22)
+            }
+        )
+
+        // System information
+        content.addView(
+            sectionTitle(
+                "System Information",
+                "Current device status"
+            )
         )
 
         val systemCard = createCard()
@@ -375,15 +440,24 @@ class MainActivity : Activity() {
         )
 
         systemCard.addView(serverText)
-        systemCard.addView(permissionText.apply {
-            setPadding(0, dp(12), 0, 0)
-        })
-        systemCard.addView(statusText.apply {
-            setPadding(0, dp(12), 0, 0)
-        })
 
         systemCard.addView(
-            actionButton("↻   Refresh Status", blue) {
+            permissionText.apply {
+                setPadding(0, dp(12), 0, 0)
+            }
+        )
+
+        systemCard.addView(
+            statusText.apply {
+                setPadding(0, dp(12), 0, 0)
+            }
+        )
+
+        systemCard.addView(
+            actionButton(
+                "↻   Refresh Status",
+                blue
+            ) {
                 updateStatus("Status refreshed.")
             }.apply {
                 setPadding(dp(12), 0, dp(12), 0)
@@ -463,11 +537,13 @@ class MainActivity : Activity() {
     ): LinearLayout {
         val card = createCard()
 
-        val heading = textView(
-            label,
-            11f,
-            textMuted,
-            true
+        card.addView(
+            textView(
+                label,
+                11f,
+                textMuted,
+                true
+            )
         )
 
         val valueText = textView(
@@ -476,14 +552,22 @@ class MainActivity : Activity() {
             accent,
             true
         ).apply {
-            tag = "value_$label"
+            tag = when (label) {
+                "SMS PERMISSION" -> "value_SMS_PERMISSION"
+                else -> "value_$label"
+            }
             setPadding(0, dp(10), 0, dp(4))
         }
 
-        card.addView(heading)
         card.addView(valueText)
+
         card.addView(
-            textView(description, 12f, textMuted, false)
+            textView(
+                description,
+                12f,
+                textMuted,
+                false
+            )
         )
 
         return card
@@ -498,11 +582,21 @@ class MainActivity : Activity() {
             setPadding(dp(2), 0, 0, dp(12))
 
             addView(
-                textView(title, 20f, navy, true)
+                textView(
+                    title,
+                    20f,
+                    navy,
+                    true
+                )
             )
 
             addView(
-                textView(subtitle, 12f, textMuted, false).apply {
+                textView(
+                    subtitle,
+                    12f,
+                    textMuted,
+                    false
+                ).apply {
                     setPadding(0, dp(4), 0, 0)
                 }
             )
@@ -528,9 +622,11 @@ class MainActivity : Activity() {
             text = value
             textSize = size
             setTextColor(color)
+
             if (bold) {
                 setTypeface(null, Typeface.BOLD)
             }
+
             gravity = Gravity.CENTER_VERTICAL
         }
     }
@@ -547,7 +643,9 @@ class MainActivity : Activity() {
             isAllCaps = false
             background = roundedBackground(color, 12)
             setPadding(dp(12), dp(6), dp(12), dp(6))
-            setOnClickListener { onClick() }
+            setOnClickListener {
+                onClick()
+            }
         }
     }
 
@@ -617,7 +715,10 @@ class MainActivity : Activity() {
         }
 
         try {
-            val intent = Intent(this, GatewayService::class.java)
+            val intent = Intent(
+                this,
+                GatewayService::class.java
+            )
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 startForegroundService(intent)
@@ -625,9 +726,45 @@ class MainActivity : Activity() {
                 startService(intent)
             }
 
+            gatewayStartRequested = true
             updateStatus("Gateway service start requested.")
         } catch (e: Exception) {
-            updateStatus("Could not start service: ${e.message}")
+            gatewayStartRequested = false
+            updateStatus(
+                "Could not start service: ${e.localizedMessage}"
+            )
+        }
+    }
+
+    private fun stopGatewayService() {
+        val stopped = stopService(
+            Intent(this, GatewayService::class.java)
+        )
+
+        gatewayStartRequested = false
+
+        updateStatus(
+            if (stopped) {
+                "Gateway service stop requested."
+            } else {
+                "Stop requested. Service may already be stopped."
+            }
+        )
+    }
+
+    private fun openGatewaySettings() {
+        try {
+            startActivity(
+                Intent(
+                    this,
+                    GatewaySettingsActivity::class.java
+                )
+            )
+        } catch (e: Exception) {
+            showToast(
+                "Could not open Gateway Settings. Check AndroidManifest.xml. " +
+                    (e.localizedMessage ?: "")
+            )
         }
     }
 
@@ -636,10 +773,12 @@ class MainActivity : Activity() {
             checkSelfPermission(Manifest.permission.SEND_SMS) ==
                 PackageManager.PERMISSION_GRANTED
 
-        val serverUrl =
-            SecureConfig.getServerUrl(this)
+        val serverUrl = SecureConfig.getServerUrl(this)
+        val deviceId = SecureConfig.getDeviceId(this)
+        val apiToken = SecureConfig.getApiToken(this)
 
-        serverText.text = "Server: ${serverUrl ?: "Not configured"}"
+        serverText.text =
+            "Server: ${serverUrl ?: "Not configured"}"
 
         permissionText.text = if (smsGranted) {
             "SMS Permission: Granted"
@@ -684,7 +823,14 @@ class MainActivity : Activity() {
         }
 
         gatewayText.text = buildString {
-            appendLine("Gateway service controls")
+            appendLine(
+                if (gatewayStartRequested) {
+                    "Gateway start has been requested."
+                } else {
+                    "Gateway service controls"
+                }
+            )
+
             appendLine(
                 if (smsGranted) {
                     "SMS permission is available."
@@ -692,7 +838,31 @@ class MainActivity : Activity() {
                     "Grant SMS permission before starting the gateway."
                 }
             )
+
+            appendLine(
+                if (serverUrl.isNullOrBlank()) {
+                    "Server URL is not configured."
+                } else {
+                    "Server URL is configured."
+                }
+            )
+
+            append(
+                if (deviceId.isNullOrBlank() || apiToken.isNullOrBlank()) {
+                    "Complete Gateway Settings before API integration."
+                } else {
+                    "Device ID and API Token are configured."
+                }
+            )
         }
+    }
+
+    private fun showToast(message: String) {
+        Toast.makeText(
+            this,
+            message,
+            Toast.LENGTH_LONG
+        ).show()
     }
 
     private fun dp(value: Int): Int =
