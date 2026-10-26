@@ -1,11 +1,15 @@
 package com.ssmediaos.smsgateway
 
 import android.Manifest
+import android.app.Activity
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.os.Build
@@ -13,20 +17,39 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.util.Log
+import org.json.JSONObject
+import java.util.concurrent.ConcurrentHashMap
 
 class GatewayService : Service() {
 
     @Volatile
     private var serviceRunning = false
 
-    private val handler = Handler(Looper.getMainLooper())
-
     @Volatile
     private var requestInProgress = false
 
-    private var currentStartId = 0
+    @Volatile
+    private var resultReporting = false
 
-    private var lastStatus = "Gateway is starting"
+    private val handler = Handler(Looper.getMainLooper())
+
+    private var currentStartId = 0
+    private var receiverRegistered = false
+
+    /*
+     * totalParts is initially unknown.
+     * It is populated from the first SMS callback.
+     */
+    private data class SmsJobState(
+        val requestId: String,
+        @Volatile var totalParts: Int = 0,
+        val results: MutableMap<Int, Boolean> = mutableMapOf(),
+        @Volatile var errorCode: String? = null,
+        @Volatile var completed: Boolean = false
+    )
+
+    private val smsJobs =
+        ConcurrentHashMap<Long, SmsJobState>()
 
     private val pollRunnable = object : Runnable {
         override fun run() {
@@ -40,9 +63,152 @@ class GatewayService : Service() {
         }
     }
 
+    /*
+     * Receives per-part SMS sent callbacks from SmsSentReceiver.
+     */
+    private val smsResultReceiver = object : BroadcastReceiver() {
+
+        override fun onReceive(context: Context, intent: Intent) {
+            if (
+                intent.action !=
+                SmsSentReceiver.ACTION_SMS_PART_RESULT
+            ) {
+                return
+            }
+
+            val jobId = intent.getLongExtra(
+                SmsSentReceiver.EXTRA_JOB_ID,
+                -1L
+            )
+
+            val requestId = intent.getStringExtra(
+                SmsSentReceiver.EXTRA_GATEWAY_REQUEST_ID
+            ).orEmpty()
+
+            val partIndex = intent.getIntExtra(
+                SmsSentReceiver.EXTRA_PART_INDEX,
+                -1
+            )
+
+            val totalParts = intent.getIntExtra(
+                SmsSentReceiver.EXTRA_TOTAL_PARTS,
+                1
+            )
+
+            val success = intent.getBooleanExtra(
+                SmsSentReceiver.EXTRA_SUCCESS,
+                false
+            )
+
+            val callbackResult = intent.getStringExtra(
+                SmsSentReceiver.EXTRA_RESULT
+            ).orEmpty()
+
+            val state = smsJobs[jobId]
+
+            if (state == null) {
+                Log.w(
+                    TAG,
+                    "Ignoring callback for unknown job: $jobId"
+                )
+                return
+            }
+
+            var finalSuccess: Boolean? = null
+            var finalError: String? = null
+
+            synchronized(state) {
+
+                if (state.completed) {
+                    Log.w(TAG, "Ignoring callback for completed job $jobId")
+                    return
+                }
+
+                if (state.requestId != requestId) {
+                    Log.w(TAG, "Request ID mismatch for job $jobId")
+                    return
+                }
+
+                if (totalParts < 1 || partIndex !in 0 until totalParts) {
+                    Log.w(TAG, "Invalid multipart callback for job $jobId")
+                    return
+                }
+
+                if (
+                    state.totalParts != 0 &&
+                    state.totalParts != totalParts
+                ) {
+                    Log.w(TAG, "Multipart count mismatch for job $jobId")
+                    return
+                }
+
+                state.totalParts = totalParts
+
+                /*
+                 * A duplicate callback for the same part must not
+                 * increase the completion count.
+                 */
+                if (state.results.containsKey(partIndex)) {
+                    Log.w(
+                        TAG,
+                        "Duplicate callback ignored: job=$jobId part=$partIndex"
+                    )
+                    return
+                }
+
+                state.results[partIndex] = success
+
+                if (!success && state.errorCode == null) {
+                    state.errorCode = callbackResult
+                        .replace(Regex("[^A-Za-z0-9_.-]"), "_")
+                        .take(100)
+                        .ifBlank { "SMS_SEND_FAILED" }
+                }
+
+                Log.i(
+                    TAG,
+                    "SMS part result: job=$jobId, " +
+                        "part=${partIndex + 1}/$totalParts, " +
+                        "success=$success"
+                )
+
+                /*
+                 * Wait for every part before reporting a final result.
+                 */
+                if (state.results.size == state.totalParts) {
+
+                    state.completed = true
+
+                    finalSuccess =
+                        state.results.values.all { it }
+
+                    finalError = if (finalSuccess == true) {
+                        null
+                    } else {
+                        state.errorCode ?: "SMS_SEND_FAILED"
+                    }
+
+                    smsJobs.remove(jobId, state)
+                }
+            }
+
+            if (finalSuccess != null) {
+                reportResult(
+                    jobId = jobId,
+                    requestId = requestId,
+                    success = finalSuccess == true,
+                    errorCode = finalError
+                )
+            }
+        }
+    }
+
     override fun onCreate() {
         super.onCreate()
+
         createNotificationChannel()
+        registerSmsResultReceiver()
+
         Log.i(TAG, "Gateway service created")
     }
 
@@ -51,7 +217,9 @@ class GatewayService : Service() {
         flags: Int,
         startId: Int
     ): Int {
+
         when (intent?.action) {
+
             ACTION_STOP -> {
                 Log.i(TAG, "Gateway stop requested")
                 stopGateway()
@@ -77,7 +245,34 @@ class GatewayService : Service() {
         }
     }
 
+    private fun registerSmsResultReceiver() {
+        if (receiverRegistered) return
+
+        val filter = IntentFilter(
+            SmsSentReceiver.ACTION_SMS_PART_RESULT
+        )
+
+        try {
+            if (Build.VERSION.SDK_INT >= 33) {
+                registerReceiver(
+                    smsResultReceiver,
+                    filter,
+                    Context.RECEIVER_NOT_EXPORTED
+                )
+            } else {
+                @Suppress("DEPRECATION")
+                registerReceiver(smsResultReceiver, filter)
+            }
+
+            receiverRegistered = true
+
+        } catch (e: Exception) {
+            Log.e(TAG, "Unable to register SMS result receiver", e)
+        }
+    }
+
     private fun startGateway(startId: Int) {
+
         if (serviceRunning) {
             Log.i(TAG, "Gateway is already running")
             return
@@ -113,6 +308,16 @@ class GatewayService : Service() {
             return
         }
 
+        if (!receiverRegistered) {
+            registerSmsResultReceiver()
+        }
+
+        if (!receiverRegistered) {
+            Log.e(TAG, "Gateway start blocked: callback receiver unavailable")
+            stopSelf(startId)
+            return
+        }
+
         try {
             val notification = createNotification("Gateway is starting")
 
@@ -128,6 +333,7 @@ class GatewayService : Service() {
 
             serviceRunning = true
             requestInProgress = false
+            resultReporting = false
 
             updateStatus("Activated — connecting to server")
 
@@ -145,7 +351,11 @@ class GatewayService : Service() {
             try {
                 stopForeground(STOP_FOREGROUND_REMOVE)
             } catch (stopException: Exception) {
-                Log.w(TAG, "Could not remove foreground notification", stopException)
+                Log.w(
+                    TAG,
+                    "Could not remove foreground notification",
+                    stopException
+                )
             }
 
             stopSelf(startId)
@@ -153,9 +363,10 @@ class GatewayService : Service() {
     }
 
     /**
-     * Requests one queued job from device_poll.php.
+     * Fetch one queued job from device_poll.php.
      *
-     * ApiClient.pollGatewayJob() must send X-Gateway-Token.
+     * Polling stays paused while a job is being sent or its
+     * final result is being reported.
      */
     private fun pollServer() {
         if (!serviceRunning || requestInProgress) return
@@ -163,6 +374,7 @@ class GatewayService : Service() {
         requestInProgress = true
 
         ApiClient.pollGatewayJob { result ->
+
             if (!serviceRunning) {
                 requestInProgress = false
                 return@pollGatewayJob
@@ -170,9 +382,21 @@ class GatewayService : Service() {
 
             result.fold(
                 onSuccess = { response ->
+
                     val job = response.optJSONObject("job")
 
-                    if (job == null || job == org.json.JSONObject.NULL) {
+                    if (
+                        !response.optBoolean("ok", false)
+                    ) {
+                        requestInProgress = false
+                        updateStatus("Invalid server response")
+                        return@fold
+                    }
+
+                    if (
+                        job == null ||
+                        job == JSONObject.NULL
+                    ) {
                         requestInProgress = false
                         updateStatus("Connected — waiting for SMS jobs")
                         return@fold
@@ -180,6 +404,7 @@ class GatewayService : Service() {
 
                     processJob(job)
                 },
+
                 onFailure = { exception ->
                     requestInProgress = false
 
@@ -196,9 +421,10 @@ class GatewayService : Service() {
     }
 
     /**
-     * Validates and submits the SMS job to Android's SMS service.
+     * Validate a claimed server job and submit it to Android.
      */
-    private fun processJob(job: org.json.JSONObject) {
+    private fun processJob(job: JSONObject) {
+
         val jobId = job.optLong("id", 0L)
         val requestId = job.optString("request_id").trim()
         val phoneNumber = job.optString("to").trim()
@@ -206,13 +432,16 @@ class GatewayService : Service() {
 
         if (
             jobId <= 0L ||
-            requestId.isBlank() ||
+            !requestId.matches(Regex("^[a-f0-9]{32}$")) ||
             phoneNumber.isBlank() ||
             message.isBlank()
         ) {
             Log.e(TAG, "Received invalid SMS job")
 
-            if (jobId > 0L && requestId.isNotBlank()) {
+            if (
+                jobId > 0L &&
+                requestId.matches(Regex("^[a-f0-9]{32}$"))
+            ) {
                 reportResult(
                     jobId = jobId,
                     requestId = requestId,
@@ -228,26 +457,30 @@ class GatewayService : Service() {
         }
 
         updateStatus("Processing SMS job")
-
         Log.i(TAG, "Processing SMS job ID: $jobId")
 
         when (
             val sendResult = SmsHelper.sendSms(
                 context = this,
                 phoneNumber = phoneNumber,
-                message = message
+                message = message,
+                jobId = jobId,
+                requestId = requestId
             )
         ) {
             is SmsHelper.SendResult.Success -> {
+
                 /*
-                 * Success here means Android accepted the SMS submission.
-                 * It does not prove final delivery to the recipient.
+                 * Do not report success here.
+                 * The SMS sent callbacks determine the final result.
+                 *
+                 * totalParts will be discovered from the callback.
                  */
-                reportResult(
-                    jobId = jobId,
-                    requestId = requestId,
-                    success = true
+                smsJobs[jobId] = SmsJobState(
+                    requestId = requestId
                 )
+
+                updateStatus("SMS submitted — awaiting Android callback")
             }
 
             is SmsHelper.SendResult.Failure -> {
@@ -260,14 +493,17 @@ class GatewayService : Service() {
                     jobId = jobId,
                     requestId = requestId,
                     success = false,
-                    errorCode = sendResult.reason.take(200)
+                    errorCode = "SMS_SUBMISSION_FAILED"
                 )
             }
         }
     }
 
     /**
-     * Reports the SMS submission result through device_result.php.
+     * Report the final result to device_result.php.
+     *
+     * The server expects job_id, request_id, success,
+     * provider_message_id and error_code.
      */
     private fun reportResult(
         jobId: Long,
@@ -275,12 +511,27 @@ class GatewayService : Service() {
         success: Boolean,
         errorCode: String? = null
     ) {
+        if (!serviceRunning) {
+            requestInProgress = false
+            return
+        }
+
+        if (resultReporting) {
+            Log.w(TAG, "A result report is already in progress")
+            return
+        }
+
+        resultReporting = true
+
         ApiClient.submitGatewayResult(
             jobId = jobId,
             requestId = requestId,
             success = success,
             errorCode = errorCode
         ) { result ->
+
+            resultReporting = false
+
             if (!serviceRunning) {
                 requestInProgress = false
                 return@submitGatewayResult
@@ -288,6 +539,18 @@ class GatewayService : Service() {
 
             result.fold(
                 onSuccess = { response ->
+
+                    if (!response.optBoolean("ok", false)) {
+                        Log.e(
+                            TAG,
+                            "Server returned an unsuccessful result response"
+                        )
+
+                        requestInProgress = false
+                        updateStatus("Result report rejected — check server")
+                        return@fold
+                    }
+
                     Log.i(
                         TAG,
                         "Server accepted result for job $jobId"
@@ -296,16 +559,21 @@ class GatewayService : Service() {
                     requestInProgress = false
 
                     if (success) {
-                        updateStatus("SMS submitted — waiting for next job")
+                        updateStatus(
+                            "SMS sent callback successful — waiting for next job"
+                        )
                     } else {
-                        updateStatus("SMS failed — waiting for next job")
+                        updateStatus(
+                            "SMS failed — waiting for next job"
+                        )
                     }
                 },
+
                 onFailure = { exception ->
+
                     /*
-                     * Do not immediately resend the SMS here.
-                     * The server may already have processed the result,
-                     * and retrying the SMS could send a duplicate.
+                     * Do not resend the SMS just because the result
+                     * report failed. The server might have processed it.
                      */
                     Log.e(
                         TAG,
@@ -321,22 +589,31 @@ class GatewayService : Service() {
     }
 
     private fun updateStatus(message: String) {
-        lastStatus = message
 
         if (!serviceRunning) return
 
         try {
             updateNotification(message)
         } catch (exception: Exception) {
-            Log.w(TAG, "Unable to update gateway notification", exception)
+            Log.w(
+                TAG,
+                "Unable to update gateway notification",
+                exception
+            )
         }
     }
 
     private fun stopGateway() {
+
         serviceRunning = false
         requestInProgress = false
+        resultReporting = false
 
         handler.removeCallbacks(pollRunnable)
+
+        // Do not clear pending SMS callbacks here.
+        // Their PendingIntents may still fire, but this service
+        // will need to be running to process their broadcasts.
 
         try {
             stopForeground(STOP_FOREGROUND_REMOVE)
@@ -349,7 +626,9 @@ class GatewayService : Service() {
     }
 
     private fun createNotificationChannel() {
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+
             val channel = NotificationChannel(
                 CHANNEL_ID,
                 "SMS Gateway Service",
@@ -368,6 +647,7 @@ class GatewayService : Service() {
     }
 
     private fun createNotification(message: String): Notification {
+
         val builder =
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 Notification.Builder(this, CHANNEL_ID)
@@ -386,6 +666,7 @@ class GatewayService : Service() {
     }
 
     private fun updateNotification(message: String) {
+
         val manager =
             getSystemService(NotificationManager::class.java)
 
@@ -401,10 +682,22 @@ class GatewayService : Service() {
     }
 
     override fun onDestroy() {
+
         serviceRunning = false
         requestInProgress = false
+        resultReporting = false
 
         handler.removeCallbacks(pollRunnable)
+
+        if (receiverRegistered) {
+            try {
+                unregisterReceiver(smsResultReceiver)
+            } catch (exception: IllegalArgumentException) {
+                Log.w(TAG, "SMS result receiver was not registered", exception)
+            }
+
+            receiverRegistered = false
+        }
 
         Log.i(TAG, "Gateway service destroyed")
         super.onDestroy()
@@ -413,6 +706,7 @@ class GatewayService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     companion object {
+
         private const val TAG = "GatewayService"
         private const val CHANNEL_ID = "sms_gateway_service"
         private const val NOTIFICATION_ID = 1001
