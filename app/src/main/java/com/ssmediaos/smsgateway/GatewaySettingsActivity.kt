@@ -2,6 +2,7 @@ package com.ssmediaos.smsgateway
 
 import android.app.Activity
 import android.os.Bundle
+import android.text.method.PasswordTransformationMethod
 import android.view.View
 import android.widget.Button
 import android.widget.EditText
@@ -52,7 +53,7 @@ class GatewaySettingsActivity : Activity() {
         apiTokenInput.hint = "Activation Token"
 
         apiTokenInput.transformationMethod =
-            android.text.method.PasswordTransformationMethod.getInstance()
+            PasswordTransformationMethod.getInstance()
     }
 
     private fun loadSavedSettings() {
@@ -69,7 +70,7 @@ class GatewaySettingsActivity : Activity() {
         )
 
         connectionStatusText.text =
-            "Enter the HTTPS server URL, Device Code and Activation Token."
+            "Enter the HTTPS server URL, then test the connection."
     }
 
     private fun setupListeners() {
@@ -83,9 +84,14 @@ class GatewaySettingsActivity : Activity() {
     }
 
     private fun saveSettings(): Boolean {
-        val serverUrl = serverUrlInput.text.toString().trim()
-        val activationToken = apiTokenInput.text.toString().trim()
-        val deviceCode = deviceIdInput.text.toString().trim()
+        val serverUrl =
+            serverUrlInput.text.toString().trim().trimEnd('/')
+
+        val activationToken =
+            apiTokenInput.text.toString().trim()
+
+        val deviceCode =
+            deviceIdInput.text.toString().trim()
 
         if (!isValidHttpsUrl(serverUrl)) {
             serverUrlInput.error =
@@ -127,7 +133,7 @@ class GatewaySettingsActivity : Activity() {
         }
 
         connectionStatusText.text =
-            "Settings saved. Server-side activation has not yet been verified."
+            "Settings saved. You can now activate the device."
 
         Toast.makeText(
             this,
@@ -153,65 +159,63 @@ class GatewaySettingsActivity : Activity() {
 
         connectionTestRunning = true
         testConnectionButton.isEnabled = false
-        connectionStatusText.text = "Checking HTTPS server connection…"
+        saveSettingsButton.isEnabled = false
+
+        connectionStatusText.text =
+            "Checking HTTPS server connection..."
 
         thread(name = "ssmediaos-server-test") {
             var connection: HttpURLConnection? = null
 
             val result = try {
-                // This is a host-reachability check, not an API-auth check.
-                // Do not assume the server has a dedicated /health route.
-                connection =
-                    URL("$serverUrl/").openConnection()
-                        as HttpURLConnection
+                connection = URL("$serverUrl/").openConnection()
+                    as HttpURLConnection
 
-                connection.requestMethod = "GET"
-                connection.connectTimeout = 10000
-                connection.readTimeout = 10000
-                // This request carries no credentials, so following the site's
-                // normal HTTP redirect is safe and avoids false failures.
-                connection.instanceFollowRedirects = true
-                connection.setRequestProperty(
-                    "User-Agent",
-                    "SS-MediaOS-SMS-Gateway/1.0"
-                )
+                connection.apply {
+                    requestMethod = "GET"
+                    connectTimeout = 15000
+                    readTimeout = 15000
+                    instanceFollowRedirects = true
+
+                    setRequestProperty(
+                        "Accept",
+                        "text/html,application/json,*/*"
+                    )
+
+                    setRequestProperty(
+                        "User-Agent",
+                        "SS-MediaOS-SMS-Gateway/1.0"
+                    )
+                }
 
                 val responseCode = connection.responseCode
 
-                // Read/close the response stream so the HTTP connection is
-                // released cleanly even when the server returns an error page.
-                val responseStream = if (responseCode in 200..399) {
-                    connection.inputStream
-                } else {
-                    connection.errorStream
-                }
-                responseStream?.use { stream ->
-                    val buffer = ByteArray(1024)
-                    while (stream.read(buffer) != -1) {
-                        // Drain a small response body; content is not needed.
-                    }
-                }
-
                 when (responseCode) {
                     in 200..299 ->
-                        "HTTPS server is reachable (HTTP $responseCode)."
+                        "HTTPS server is reachable (HTTP $responseCode). " +
+                            "This test does not verify API authentication."
 
                     in 300..399 ->
-                        "Server returned a redirect (HTTP $responseCode). Check the configured HTTPS URL."
+                        "Server returned HTTP $responseCode. " +
+                            "Check the HTTPS URL and redirects."
 
                     in 400..499 ->
-                        "HTTPS server is reachable, but returned HTTP $responseCode."
+                        "HTTPS server responded with HTTP $responseCode. " +
+                            "The server is reachable, but rejected this request."
 
                     in 500..599 ->
-                        "HTTPS server is reachable, but returned a server error (HTTP $responseCode)."
+                        "HTTPS server is reachable, but returned " +
+                            "HTTP $responseCode."
 
                     else ->
                         "Server responded with HTTP $responseCode."
                 }
             } catch (e: Exception) {
-                "Connection failed: ${
-                    e.localizedMessage ?: "Check internet and server URL."
-                }"
+                val detail = e.localizedMessage
+                    ?.takeIf { it.isNotBlank() }
+                    ?: e.javaClass.simpleName
+
+                "Connection failed (${e.javaClass.simpleName}): $detail"
             } finally {
                 connection?.disconnect()
             }
@@ -219,6 +223,7 @@ class GatewaySettingsActivity : Activity() {
             runOnUiThread {
                 connectionStatusText.text = result
                 testConnectionButton.isEnabled = true
+                saveSettingsButton.isEnabled = true
                 connectionTestRunning = false
             }
         }
@@ -242,7 +247,5 @@ class GatewaySettingsActivity : Activity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        // The connection has timeouts; no Activity reference is
-        // accessed from the worker thread until runOnUiThread.
     }
 }
