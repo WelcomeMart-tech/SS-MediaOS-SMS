@@ -5,6 +5,7 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.telephony.SmsManager
 import android.util.Log
@@ -14,8 +15,6 @@ object SmsHelper {
 
     private const val TAG = "SmsHelper"
 
-    private const val EXTRA_REQUEST_CODE = "request_code"
-
     private val requestCodeCounter = AtomicInteger(2000)
 
     sealed class SendResult {
@@ -24,20 +23,23 @@ object SmsHelper {
     }
 
     /**
-     * Submits an SMS to Android's SMS service.
-     *
      * Success means Android accepted the send request.
-     * Final delivery is reported separately by SmsSentReceiver.
+     * It does not mean that the recipient received the SMS.
+     *
+     * jobId and requestId connect Android callbacks to the server job.
      */
     fun sendSms(
         context: Context,
         phoneNumber: String,
-        message: String
+        message: String,
+        jobId: Long,
+        requestId: String
     ): SendResult {
 
         val appContext = context.applicationContext
         val number = phoneNumber.trim()
         val smsText = message.trim()
+        val normalizedRequestId = requestId.trim()
 
         if (number.isBlank()) {
             return SendResult.Failure("Phone number is required.")
@@ -45,6 +47,14 @@ object SmsHelper {
 
         if (smsText.isBlank()) {
             return SendResult.Failure("Message cannot be empty.")
+        }
+
+        if (jobId < 1L) {
+            return SendResult.Failure("Invalid SMS job ID.")
+        }
+
+        if (!normalizedRequestId.matches(Regex("^[a-f0-9]{32}$"))) {
+            return SendResult.Failure("Invalid gateway request ID.")
         }
 
         if (
@@ -73,9 +83,15 @@ object SmsHelper {
 
             val sentIntents = ArrayList<PendingIntent>(parts.size)
 
-            repeat(parts.size) {
+            parts.forEachIndexed { index, _ ->
                 sentIntents.add(
-                    createSentPendingIntent(appContext)
+                    createSentPendingIntent(
+                        context = appContext,
+                        jobId = jobId,
+                        requestId = normalizedRequestId,
+                        partIndex = index,
+                        totalParts = parts.size
+                    )
                 )
             }
 
@@ -99,37 +115,31 @@ object SmsHelper {
 
             Log.i(
                 TAG,
-                "SMS submission requested; parts=${parts.size}"
+                "SMS submission requested; jobId=$jobId, " +
+                    "parts=${parts.size}"
             )
 
             SendResult.Success
 
         } catch (e: SecurityException) {
             Log.e(TAG, "SMS permission/security error", e)
-
             SendResult.Failure(
                 e.message ?: "SMS permission or security error."
             )
-
         } catch (e: IllegalArgumentException) {
             Log.e(TAG, "Invalid SMS arguments", e)
-
             SendResult.Failure(
                 e.message ?: "Invalid phone number or SMS arguments."
             )
-
         } catch (e: Exception) {
             Log.e(TAG, "SMS submission failed", e)
-
             SendResult.Failure(
                 e.message ?: "Unable to submit SMS."
             )
         }
     }
 
-    private fun getSmsManager(
-        context: Context
-    ): SmsManager? {
+    private fun getSmsManager(context: Context): SmsManager? {
         return try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 context.getSystemService(SmsManager::class.java)
@@ -144,7 +154,11 @@ object SmsHelper {
     }
 
     private fun createSentPendingIntent(
-        context: Context
+        context: Context,
+        jobId: Long,
+        requestId: String,
+        partIndex: Int,
+        totalParts: Int
     ): PendingIntent {
 
         val requestCode = requestCodeCounter.getAndIncrement()
@@ -154,8 +168,29 @@ object SmsHelper {
             SmsSentReceiver::class.java
         ).apply {
             action = SmsSentReceiver.ACTION_SMS_RESULT
-            putExtra(EXTRA_REQUEST_CODE, requestCode)
-            data = android.net.Uri.parse(
+
+            putExtra(
+                SmsSentReceiver.EXTRA_REQUEST_CODE,
+                requestCode
+            )
+            putExtra(
+                SmsSentReceiver.EXTRA_JOB_ID,
+                jobId
+            )
+            putExtra(
+                SmsSentReceiver.EXTRA_GATEWAY_REQUEST_ID,
+                requestId
+            )
+            putExtra(
+                SmsSentReceiver.EXTRA_PART_INDEX,
+                partIndex
+            )
+            putExtra(
+                SmsSentReceiver.EXTRA_TOTAL_PARTS,
+                totalParts
+            )
+
+            data = Uri.parse(
                 "ssmediaos://sms-sent/$requestCode"
             )
         }
