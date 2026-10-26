@@ -159,14 +159,18 @@ class GatewaySettingsActivity : Activity() {
             var connection: HttpURLConnection? = null
 
             val result = try {
+                // This is a host-reachability check, not an API-auth check.
+                // Do not assume the server has a dedicated /health route.
                 connection =
-                    URL("$serverUrl/health").openConnection()
+                    URL("$serverUrl/").openConnection()
                         as HttpURLConnection
 
                 connection.requestMethod = "GET"
                 connection.connectTimeout = 10000
                 connection.readTimeout = 10000
-                connection.instanceFollowRedirects = false
+                // This request carries no credentials, so following the site's
+                // normal HTTP redirect is safe and avoids false failures.
+                connection.instanceFollowRedirects = true
                 connection.setRequestProperty(
                     "User-Agent",
                     "SS-MediaOS-SMS-Gateway/1.0"
@@ -174,18 +178,32 @@ class GatewaySettingsActivity : Activity() {
 
                 val responseCode = connection.responseCode
 
+                // Read/close the response stream so the HTTP connection is
+                // released cleanly even when the server returns an error page.
+                val responseStream = if (responseCode in 200..399) {
+                    connection.inputStream
+                } else {
+                    connection.errorStream
+                }
+                responseStream?.use { stream ->
+                    val buffer = ByteArray(1024)
+                    while (stream.read(buffer) != -1) {
+                        // Drain a small response body; content is not needed.
+                    }
+                }
+
                 when (responseCode) {
                     in 200..299 ->
-                        "Server health endpoint responded successfully (HTTP $responseCode)."
+                        "HTTPS server is reachable (HTTP $responseCode)."
 
-                    301, 302, 307, 308 ->
-                        "Server redirected the request. Configure the final HTTPS URL directly."
+                    in 300..399 ->
+                        "Server returned a redirect (HTTP $responseCode). Check the configured HTTPS URL."
 
-                    401, 403 ->
-                        "Server is reachable, but access was denied (HTTP $responseCode)."
+                    in 400..499 ->
+                        "HTTPS server is reachable, but returned HTTP $responseCode."
 
-                    404 ->
-                        "Server is reachable, but /health was not found (HTTP 404)."
+                    in 500..599 ->
+                        "HTTPS server is reachable, but returned a server error (HTTP $responseCode)."
 
                     else ->
                         "Server responded with HTTP $responseCode."
