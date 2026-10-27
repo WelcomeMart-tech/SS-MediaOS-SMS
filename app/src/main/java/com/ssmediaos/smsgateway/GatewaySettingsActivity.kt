@@ -52,6 +52,14 @@ class GatewaySettingsActivity : Activity() {
         testConnectionButton = findViewById(R.id.testConnectionButton)
         activateDeviceButton = findViewById(R.id.activateDeviceButton)
 
+        // Server URL and Device ID are controlled internally.
+        serverUrlInput.setText(SecureConfig.DEFAULT_SERVER_URL)
+        serverUrlInput.isEnabled = false
+
+        val deviceCode = SecureConfig.getDeviceCode(this).orEmpty()
+        deviceIdInput.setText(deviceCode)
+        deviceIdInput.isEnabled = false
+
         loadSettings()
 
         saveSettingsButton.setOnClickListener {
@@ -68,81 +76,53 @@ class GatewaySettingsActivity : Activity() {
     }
 
     private fun loadSettings() {
-        serverUrlInput.setText(
-            SecureConfig.getServerUrl(this).orEmpty()
-        )
+        serverUrlInput.setText(SecureConfig.DEFAULT_SERVER_URL)
 
+        // The XML input should use textPassword so the API key is masked.
         apiTokenInput.setText(
-            SecureConfig.getActivationToken(this).orEmpty()
+            SecureConfig.getCompanyApiKey(this).orEmpty()
         )
 
         deviceIdInput.setText(
-            SecureConfig.getDeviceId(this).orEmpty()
+            SecureConfig.getDeviceCode(this).orEmpty()
         )
 
         updateActivationStatus()
     }
 
     private fun saveSettings(): Boolean {
-        val serverUrl = serverUrlInput.text.toString()
-            .trim()
-            .trimEnd('/')
+        val companyApiKey = apiTokenInput.text.toString().trim()
+        val deviceCode = SecureConfig.getDeviceCode(this).orEmpty()
 
-        val activationToken = apiTokenInput.text.toString().trim()
-        val deviceId = deviceIdInput.text.toString().trim()
-
-        if (serverUrl.isBlank()) {
-            serverUrlInput.error = "Server URL required"
-            serverUrlInput.requestFocus()
-            return false
-        }
-
-        if (!serverUrl.startsWith("https://", ignoreCase = true)) {
-            serverUrlInput.error = "HTTPS URL required"
-            serverUrlInput.requestFocus()
-            return false
-        }
-
-        if (activationToken.isBlank()) {
-            apiTokenInput.error = "Activation token required"
+        if (companyApiKey.isBlank()) {
+            apiTokenInput.error = "Company API Token required"
             apiTokenInput.requestFocus()
             return false
         }
 
-        if (deviceId.isBlank()) {
-            deviceIdInput.error = "Device ID required"
-            deviceIdInput.requestFocus()
+        if (deviceCode.isBlank()) {
+            connectionStatusText.text =
+                "Unable to create this installation's Device ID."
             return false
         }
 
         return try {
-            val previousServerUrl = SecureConfig.getServerUrl(this)
-                .orEmpty()
-                .trim()
-                .trimEnd('/')
-
-            val previousDeviceId = SecureConfig.getDeviceId(this)
-                .orEmpty()
-                .trim()
-
-            val settingsChanged =
-                previousServerUrl != serverUrl ||
-                previousDeviceId != deviceId
+            val oldApiKey = SecureConfig.getCompanyApiKey(this).orEmpty()
 
             val saved = SecureConfig.saveActivationSettings(
                 context = this,
-                serverUrl = serverUrl,
-                deviceCode = deviceId,
-                activationToken = activationToken
+                serverUrl = SecureConfig.DEFAULT_SERVER_URL,
+                deviceCode = deviceCode,
+                activationToken = companyApiKey
             )
 
             if (!saved) {
                 connectionStatusText.text =
-                    "Settings could not be saved. Check the server URL."
+                    "Settings could not be saved. Please check the Company API Token."
                 return false
             }
 
-            if (settingsChanged) {
+            if (oldApiKey != companyApiKey) {
                 SecureConfig.clearDeviceToken(this)
                 setServerState(STATE_CONNECTING)
             }
@@ -151,7 +131,7 @@ class GatewaySettingsActivity : Activity() {
 
             Toast.makeText(
                 this,
-                "Settings saved successfully",
+                "Company API Token saved successfully",
                 Toast.LENGTH_SHORT
             ).show()
 
@@ -169,16 +149,13 @@ class GatewaySettingsActivity : Activity() {
         connectionStatusText.text = "Checking server connection..."
         testConnectionButton.isEnabled = false
 
-        val serverUrl = serverUrlInput.text.toString()
-            .trim()
-            .trimEnd('/')
-
         Thread {
             var reachable = false
 
             val resultText = try {
-                val connection = URL("$serverUrl/")
-                    .openConnection() as HttpURLConnection
+                val connection = URL(
+                    "${SecureConfig.DEFAULT_SERVER_URL}/"
+                ).openConnection() as HttpURLConnection
 
                 connection.requestMethod = "GET"
                 connection.connectTimeout = CONNECTION_TIMEOUT
@@ -188,12 +165,10 @@ class GatewaySettingsActivity : Activity() {
 
                 try {
                     val statusCode = connection.responseCode
-
                     reachable = statusCode in 200..299
 
                     if (reachable) {
-                        "Server is reachable (HTTP $statusCode). " +
-                            "Device activation and gateway polling are checked separately."
+                        "Server is reachable (HTTP $statusCode)."
                     } else {
                         "Server responded with HTTP $statusCode."
                     }
@@ -221,16 +196,23 @@ class GatewaySettingsActivity : Activity() {
         if (!saveSettings()) return
 
         activateDeviceButton.isEnabled = false
-        activateDeviceButton.text = "Activating..."
-        activationStatusText.text = "Device status: ACTIVATION IN PROGRESS"
-        connectionStatusText.text = "Sending activation request to server..."
+        activateDeviceButton.text = "Connecting..."
+        activationStatusText.text =
+            "Device status: ACTIVATION IN PROGRESS"
+        connectionStatusText.text =
+            "Connecting securely to SS MediaOS..."
 
-        val serverUrl = serverUrlInput.text.toString()
-            .trim()
-            .trimEnd('/')
+        val serverUrl = SecureConfig.DEFAULT_SERVER_URL
+        val deviceCode = SecureConfig.getDeviceCode(this).orEmpty()
+        val companyApiKey = SecureConfig.getCompanyApiKey(this).orEmpty()
 
-        val deviceCode = deviceIdInput.text.toString().trim()
-        val activationToken = apiTokenInput.text.toString().trim()
+        if (deviceCode.isBlank() || companyApiKey.isBlank()) {
+            activateDeviceButton.isEnabled = true
+            activateDeviceButton.text = "Connect Device"
+            connectionStatusText.text =
+                "Device ID or Company API Token is missing."
+            return
+        }
 
         setServerState(STATE_CONNECTING)
 
@@ -255,7 +237,6 @@ class GatewaySettingsActivity : Activity() {
                     "Content-Type",
                     "application/json; charset=UTF-8"
                 )
-
                 connection.setRequestProperty(
                     "Accept",
                     "application/json"
@@ -263,7 +244,7 @@ class GatewaySettingsActivity : Activity() {
 
                 val requestBody = JSONObject().apply {
                     put("deviceCode", deviceCode)
-                    put("activationToken", activationToken)
+                    put("companyApiKey", companyApiKey)
                 }.toString()
 
                 try {
@@ -312,12 +293,7 @@ class GatewaySettingsActivity : Activity() {
                         response.optBoolean("ok", false) &&
                         deviceToken.isNotBlank()
                     ) {
-                        val savedToken = SecureConfig.saveDeviceToken(
-                            this,
-                            deviceToken
-                        )
-
-                        if (savedToken) {
+                        if (SecureConfig.saveDeviceToken(this, deviceToken)) {
                             success = true
                             message = "Device activated successfully."
                         } else {
@@ -336,17 +312,17 @@ class GatewaySettingsActivity : Activity() {
                     connection.disconnect()
                 }
             } catch (e: Exception) {
-                message = "Activation error: ${e.message ?: "Network error"}"
+                message =
+                    "Activation error: ${e.message ?: "Network error"}"
             }
 
             runOnUiThread {
                 activateDeviceButton.isEnabled = true
-                activateDeviceButton.text = "Activate Device"
+                activateDeviceButton.text = "Connect Device"
                 connectionStatusText.text = message
 
                 if (success) {
-                    activationStatusText.text =
-                        "Device status: ACTIVATED"
+                    activationStatusText.text = "Device status: ACTIVATED"
 
                     Toast.makeText(
                         this,
@@ -374,24 +350,20 @@ class GatewaySettingsActivity : Activity() {
 
     private fun updateActivationStatus() {
         val deviceToken = SecureConfig.getDeviceToken(this)
-        val activationToken = SecureConfig.getActivationToken(this)
-        val deviceId = SecureConfig.getDeviceId(this)
-        val serverUrl = SecureConfig.getServerUrl(this)
+        val companyApiKey = SecureConfig.getCompanyApiKey(this)
+        val deviceCode = SecureConfig.getDeviceCode(this)
 
         if (
             deviceToken.isNullOrBlank() ||
-            activationToken.isNullOrBlank() ||
-            deviceId.isNullOrBlank() ||
-            serverUrl.isNullOrBlank()
+            companyApiKey.isNullOrBlank() ||
+            deviceCode.isNullOrBlank()
         ) {
-            activationStatusText.text =
-                "Device status: NOT ACTIVATED"
+            activationStatusText.text = "Device status: NOT ACTIVATED"
 
             if (connectionStatusText.text.isNullOrBlank()) {
                 connectionStatusText.text =
-                    "Server settings and device activation are required."
+                    "Enter the Company API Token and activate this device."
             }
-
             return
         }
 
@@ -417,9 +389,8 @@ class GatewaySettingsActivity : Activity() {
             0L
         )
 
-        val currentTime = System.currentTimeMillis()
         val isRecent = lastCheckAt > 0L &&
-            currentTime - lastCheckAt <= 30000L
+            System.currentTimeMillis() - lastCheckAt <= 30000L
 
         when {
             !serviceRunning -> {
