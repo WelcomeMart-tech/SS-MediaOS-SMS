@@ -1,3 +1,4 @@
+
 <?xml version="1.0" encoding="utf-8"?>
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
@@ -57,7 +58,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="20dp"
-                android:text="API Token"
+                android:text="Activation Token"
                 android:textColor="#1E293B"
                 android:textStyle="bold"
                 android:textSize="15sp" />
@@ -67,7 +68,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
-                android:hint="Enter your API token"
+                android:hint="Enter your activation token"
                 android:inputType="textPassword"
                 android:singleLine="true"
                 android:autofillHints="password" />
@@ -107,6 +108,17 @@
                 android:text="Test Server Connection"
                 android:textAllCaps="false" />
 
+            <Button
+                android:id="@+id/activateDeviceButton"
+                android:layout_width="match_parent"
+                android:layout_height="54dp"
+                android:layout_marginTop="10dp"
+                android:text="Activate Device"
+                android:textAllCaps="false"
+                android:textStyle="bold"
+                android:backgroundTint="#0F766E"
+                android:textColor="#FFFFFF" />
+
             <TextView
                 android:id="@+id/connectionStatusText"
                 android:layout_width="match_parent"
@@ -114,6 +126,18 @@
                 android:layout_marginTop="18dp"
                 android:text="Connection status: Not tested"
                 android:textColor="#64748B"
+                android:textSize="14sp" />
+
+            <TextView
+                android:id="@+id/activationStatusText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:padding="12dp"
+                android:background="#F1F5F9"
+                android:text="Device status: NOT ACTIVATED"
+                android:textColor="#B45309"
+                android:textStyle="bold"
                 android:textSize="14sp" />
 
         </LinearLayout>
@@ -130,4 +154,3 @@
     </LinearLayout>
 
 </ScrollView>
-
