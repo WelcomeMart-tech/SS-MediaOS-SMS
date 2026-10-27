@@ -6,6 +6,7 @@ import android.widget.Button
 import android.widget.EditText
 import android.widget.TextView
 import android.widget.Toast
+import android.view.View
 import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.InputStreamReader
@@ -54,7 +55,7 @@ class GatewaySettingsActivity : Activity() {
 
         // Server URL and Device ID are controlled internally.
         serverUrlInput.setText(SecureConfig.DEFAULT_SERVER_URL)
-        serverUrlInput.isEnabled = false
+        serverUrlInput.visibility = View.GONE // Server URL is never shown in the UI.
 
         val deviceCode = SecureConfig.getDeviceCode(this).orEmpty()
         deviceIdInput.setText(deviceCode)
@@ -77,6 +78,7 @@ class GatewaySettingsActivity : Activity() {
 
     private fun loadSettings() {
         serverUrlInput.setText(SecureConfig.DEFAULT_SERVER_URL)
+        serverUrlInput.visibility = View.GONE
 
         // The XML input should use textPassword so the API key is masked.
         apiTokenInput.setText(
@@ -138,7 +140,7 @@ class GatewaySettingsActivity : Activity() {
             true
         } catch (e: Exception) {
             connectionStatusText.text =
-                "Settings save failed: ${e.message ?: "Unknown error"}"
+                "Settings could not be saved. Please try again."
             false
         }
     }
@@ -176,7 +178,7 @@ class GatewaySettingsActivity : Activity() {
                     connection.disconnect()
                 }
             } catch (e: Exception) {
-                "Connection failed: ${e.message ?: "Network error"}"
+                "Connection failed. Check your internet connection and try again."
             }
 
             runOnUiThread {
@@ -313,7 +315,7 @@ class GatewaySettingsActivity : Activity() {
                 }
             } catch (e: Exception) {
                 message =
-                    "Activation error: ${e.message ?: "Network error"}"
+                    "Activation failed. Check your connection and try again."
             }
 
             runOnUiThread {
