@@ -2,10 +2,17 @@ package com.ssmediaos.smsgateway
 
 import android.content.Context
 import java.net.URI
+import java.util.UUID
 
 object SecureConfig {
 
     private const val PREFS_NAME = "ssmediaos_gateway_config"
+
+    const val DEFAULT_SERVER_URL = "https://otp.ssmediaos.in"
+
+    // Kept for compatibility with older files.
+    // Never use this fixed value as the actual device ID.
+    const val DEFAULT_DEVICE_CODE = ""
 
     private const val KEY_SERVER_URL = "server_url"
     private const val KEY_DEVICE_ID = "device_id"
@@ -18,29 +25,54 @@ object SecureConfig {
             Context.MODE_PRIVATE
         )
 
-    fun getServerUrl(context: Context): String? =
+    fun getServerUrl(context: Context): String =
         preferences(context)
-            .getString(KEY_SERVER_URL, null)
+            .getString(KEY_SERVER_URL, DEFAULT_SERVER_URL)
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+            ?: DEFAULT_SERVER_URL
+
+    /**
+     * Creates one unique ID per app installation.
+     * The ID remains stable across normal app restarts.
+     */
+    fun getDeviceCode(context: Context): String {
+        val prefs = preferences(context)
+
+        val existing = prefs.getString(KEY_DEVICE_ID, null)
             ?.trim()
             ?.takeIf { it.isNotEmpty() }
 
-    // Compatibility methods for existing files.
-    // Device ID is retained as the legacy name for Device Code.
-    fun getDeviceId(context: Context): String? =
+        if (existing != null) {
+            return existing
+        }
+
+        val generated = "SSM-${UUID.randomUUID()}"
+
+        return if (
+            prefs.edit()
+                .putString(KEY_DEVICE_ID, generated)
+                .commit()
+        ) {
+            generated
+        } else {
+            throw IllegalStateException(
+                "Could not save the device ID."
+            )
+        }
+    }
+
+    // Compatibility alias for existing app files.
+    fun getDeviceId(context: Context): String =
         getDeviceCode(context)
 
-    // Legacy API token getter returns the Activation Token.
-    // Use getDeviceToken() for authenticated API requests after activation.
     fun getApiToken(context: Context): String? =
-        getActivationToken(context)
-
-    fun getDeviceCode(context: Context): String? =
-        preferences(context)
-            .getString(KEY_DEVICE_ID, null)
-            ?.trim()
-            ?.takeIf { it.isNotEmpty() }
+        getCompanyApiKey(context)
 
     fun getActivationToken(context: Context): String? =
+        getCompanyApiKey(context)
+
+    fun getCompanyApiKey(context: Context): String? =
         preferences(context)
             .getString(KEY_API_TOKEN, null)
             ?.trim()
@@ -52,6 +84,10 @@ object SecureConfig {
             ?.trim()
             ?.takeIf { it.isNotEmpty() }
 
+    /**
+     * Saves server URL, company API key, and device ID.
+     * The production server URL is validated as HTTPS.
+     */
     fun saveSettings(
         context: Context,
         serverUrl: String,
@@ -61,29 +97,32 @@ object SecureConfig {
         val normalizedUrl = normalizeServerUrl(serverUrl)
             ?: return false
 
-        val activationToken = apiToken.trim()
+        val companyApiKey = apiToken.trim()
         val deviceCode = deviceId.trim()
 
-        if (activationToken.isBlank() || deviceCode.isBlank()) {
+        if (
+            companyApiKey.isBlank() ||
+            deviceCode.isBlank()
+        ) {
             return false
         }
 
         val prefs = preferences(context)
+
         val existingUrl = prefs.getString(KEY_SERVER_URL, null)
         val existingCode = prefs.getString(KEY_DEVICE_ID, null)
-        val existingActivationToken = prefs.getString(KEY_API_TOKEN, null)
+        val existingApiKey = prefs.getString(KEY_API_TOKEN, null)
 
         val activationDetailsChanged =
             existingUrl != normalizedUrl ||
             existingCode != deviceCode ||
-            existingActivationToken != activationToken
+            existingApiKey != companyApiKey
 
         val editor = prefs.edit()
             .putString(KEY_SERVER_URL, normalizedUrl)
-            .putString(KEY_API_TOKEN, activationToken)
+            .putString(KEY_API_TOKEN, companyApiKey)
             .putString(KEY_DEVICE_ID, deviceCode)
 
-        // Clear the old session when activation details change.
         if (activationDetailsChanged) {
             editor.remove(KEY_DEVICE_TOKEN)
         }
@@ -110,7 +149,6 @@ object SecureConfig {
         deviceToken: String
     ): Boolean {
         val value = deviceToken.trim()
-
         if (value.isBlank()) return false
 
         return preferences(context)
@@ -151,7 +189,6 @@ object SecureConfig {
         deviceId: String
     ): Boolean {
         val value = deviceId.trim()
-
         if (value.isBlank()) return false
 
         val prefs = preferences(context)
@@ -177,7 +214,6 @@ object SecureConfig {
         apiToken: String
     ): Boolean {
         val value = apiToken.trim()
-
         if (value.isBlank()) return false
 
         val prefs = preferences(context)
@@ -216,9 +252,7 @@ object SecureConfig {
             val validScheme =
                 uri.scheme.equals("https", ignoreCase = true)
 
-            val validHost =
-                !uri.host.isNullOrBlank()
-
+            val validHost = !uri.host.isNullOrBlank()
             val noUserInfo = uri.rawUserInfo == null
             val noQueryOrFragment =
                 uri.rawQuery == null && uri.rawFragment == null
