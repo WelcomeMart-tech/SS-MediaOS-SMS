@@ -2,17 +2,16 @@ package com.ssmediaos.smsgateway
 
 import android.app.Activity
 import android.os.Bundle
-import android.view.View
 import android.widget.Button
 import android.widget.EditText
 import android.widget.TextView
 import android.widget.Toast
 import org.json.JSONObject
-import java.net.HttpURLConnection
-import java.net.URL
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.io.OutputStreamWriter
+import java.net.HttpURLConnection
+import java.net.URL
 
 class GatewaySettingsActivity : Activity() {
 
@@ -25,6 +24,21 @@ class GatewaySettingsActivity : Activity() {
     private lateinit var testConnectionButton: Button
     private lateinit var activateDeviceButton: Button
 
+    private val statusPrefsName = "ss_mediaos_gateway_status"
+
+    companion object {
+        private const val CONNECTION_TIMEOUT = 15000
+        private const val ACTIVATION_READ_TIMEOUT = 20000
+
+        private const val PREF_SERVICE_RUNNING = "service_running"
+        private const val PREF_SERVER_STATE = "server_state"
+        private const val PREF_SERVER_CHECK_AT = "server_check_at"
+
+        private const val STATE_CONNECTED = "CONNECTED"
+        private const val STATE_FAILED = "FAILED"
+        private const val STATE_CONNECTING = "CONNECTING"
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_gateway_settings)
@@ -33,11 +47,10 @@ class GatewaySettingsActivity : Activity() {
         apiTokenInput = findViewById(R.id.apiTokenInput)
         deviceIdInput = findViewById(R.id.deviceIdInput)
         connectionStatusText = findViewById(R.id.connectionStatusText)
+        activationStatusText = findViewById(R.id.activationStatusText)
         saveSettingsButton = findViewById(R.id.saveSettingsButton)
         testConnectionButton = findViewById(R.id.testConnectionButton)
         activateDeviceButton = findViewById(R.id.activateDeviceButton)
-
-        activationStatusText = findViewById(R.id.activationStatusText)
 
         loadSettings()
 
@@ -71,7 +84,10 @@ class GatewaySettingsActivity : Activity() {
     }
 
     private fun saveSettings(): Boolean {
-        val serverUrl = serverUrlInput.text.toString().trim()
+        val serverUrl = serverUrlInput.text.toString()
+            .trim()
+            .trimEnd('/')
+
         val activationToken = apiTokenInput.text.toString().trim()
         val deviceId = deviceIdInput.text.toString().trim()
 
@@ -100,6 +116,19 @@ class GatewaySettingsActivity : Activity() {
         }
 
         return try {
+            val previousServerUrl = SecureConfig.getServerUrl(this)
+                .orEmpty()
+                .trim()
+                .trimEnd('/')
+
+            val previousDeviceId = SecureConfig.getDeviceId(this)
+                .orEmpty()
+                .trim()
+
+            val settingsChanged =
+                previousServerUrl != serverUrl ||
+                previousDeviceId != deviceId
+
             val saved = SecureConfig.saveActivationSettings(
                 context = this,
                 serverUrl = serverUrl,
@@ -111,6 +140,11 @@ class GatewaySettingsActivity : Activity() {
                 connectionStatusText.text =
                     "Settings could not be saved. Check the server URL."
                 return false
+            }
+
+            if (settingsChanged) {
+                SecureConfig.clearDeviceToken(this)
+                setServerState(STATE_CONNECTING)
             }
 
             updateActivationStatus()
@@ -132,7 +166,7 @@ class GatewaySettingsActivity : Activity() {
     private fun testConnection() {
         if (!saveSettings()) return
 
-        connectionStatusText.text = "Checking server connection…"
+        connectionStatusText.text = "Checking server connection..."
         testConnectionButton.isEnabled = false
 
         val serverUrl = serverUrlInput.text.toString()
@@ -140,22 +174,28 @@ class GatewaySettingsActivity : Activity() {
             .trimEnd('/')
 
         Thread {
+            var reachable = false
+
             val resultText = try {
                 val connection = URL("$serverUrl/")
                     .openConnection() as HttpURLConnection
 
                 connection.requestMethod = "GET"
-                connection.connectTimeout = 15000
-                connection.readTimeout = 15000
+                connection.connectTimeout = CONNECTION_TIMEOUT
+                connection.readTimeout = CONNECTION_TIMEOUT
                 connection.useCaches = false
+                connection.instanceFollowRedirects = true
 
                 try {
                     val statusCode = connection.responseCode
 
-                    if (statusCode in 200..299) {
-                        "Server connection successful (HTTP $statusCode)"
+                    reachable = statusCode in 200..299
+
+                    if (reachable) {
+                        "Server is reachable (HTTP $statusCode). " +
+                            "Device activation and gateway polling are checked separately."
                     } else {
-                        "Server responded with HTTP $statusCode"
+                        "Server responded with HTTP $statusCode."
                     }
                 } finally {
                     connection.disconnect()
@@ -166,7 +206,13 @@ class GatewaySettingsActivity : Activity() {
 
             runOnUiThread {
                 connectionStatusText.text = resultText
+
+                if (!reachable) {
+                    setServerState(STATE_FAILED)
+                }
+
                 testConnectionButton.isEnabled = true
+                updateActivationStatus()
             }
         }.start()
     }
@@ -186,6 +232,8 @@ class GatewaySettingsActivity : Activity() {
         val deviceCode = deviceIdInput.text.toString().trim()
         val activationToken = apiTokenInput.text.toString().trim()
 
+        setServerState(STATE_CONNECTING)
+
         Thread {
             var success = false
             var message = "Activation failed."
@@ -198,14 +246,16 @@ class GatewaySettingsActivity : Activity() {
                     .openConnection() as HttpURLConnection
 
                 connection.requestMethod = "POST"
-                connection.connectTimeout = 15000
-                connection.readTimeout = 20000
+                connection.connectTimeout = CONNECTION_TIMEOUT
+                connection.readTimeout = ACTIVATION_READ_TIMEOUT
                 connection.doOutput = true
                 connection.useCaches = false
+
                 connection.setRequestProperty(
                     "Content-Type",
                     "application/json; charset=UTF-8"
                 )
+
                 connection.setRequestProperty(
                     "Accept",
                     "application/json"
@@ -277,6 +327,7 @@ class GatewaySettingsActivity : Activity() {
                         }
                     } else {
                         message = serverMessage
+
                         if (statusCode !in 200..299) {
                             message += " (HTTP $statusCode)"
                         }
@@ -291,7 +342,6 @@ class GatewaySettingsActivity : Activity() {
             runOnUiThread {
                 activateDeviceButton.isEnabled = true
                 activateDeviceButton.text = "Activate Device"
-
                 connectionStatusText.text = message
 
                 if (success) {
@@ -304,6 +354,9 @@ class GatewaySettingsActivity : Activity() {
                         Toast.LENGTH_LONG
                     ).show()
                 } else {
+                    SecureConfig.clearDeviceToken(this)
+                    setServerState(STATE_FAILED)
+
                     activationStatusText.text =
                         "Device status: NOT ACTIVATED"
 
@@ -313,25 +366,104 @@ class GatewaySettingsActivity : Activity() {
                         Toast.LENGTH_LONG
                     ).show()
                 }
+
+                updateActivationStatus()
             }
         }.start()
     }
 
     private fun updateActivationStatus() {
         val deviceToken = SecureConfig.getDeviceToken(this)
+        val activationToken = SecureConfig.getActivationToken(this)
+        val deviceId = SecureConfig.getDeviceId(this)
+        val serverUrl = SecureConfig.getServerUrl(this)
 
-        if (deviceToken.isNullOrBlank()) {
+        if (
+            deviceToken.isNullOrBlank() ||
+            activationToken.isNullOrBlank() ||
+            deviceId.isNullOrBlank() ||
+            serverUrl.isNullOrBlank()
+        ) {
             activationStatusText.text =
                 "Device status: NOT ACTIVATED"
 
-            connectionStatusText.text =
-                "Device activation is required."
-        } else {
-            activationStatusText.text =
-                "Device status: ACTIVATED"
+            if (connectionStatusText.text.isNullOrBlank()) {
+                connectionStatusText.text =
+                    "Server settings and device activation are required."
+            }
 
-            connectionStatusText.text =
-                "Device token is saved on this device."
+            return
+        }
+
+        activationStatusText.text = "Device status: ACTIVATED"
+
+        val prefs = getSharedPreferences(
+            statusPrefsName,
+            MODE_PRIVATE
+        )
+
+        val serviceRunning = prefs.getBoolean(
+            PREF_SERVICE_RUNNING,
+            false
+        )
+
+        val serverState = prefs.getString(
+            PREF_SERVER_STATE,
+            STATE_CONNECTING
+        ) ?: STATE_CONNECTING
+
+        val lastCheckAt = prefs.getLong(
+            PREF_SERVER_CHECK_AT,
+            0L
+        )
+
+        val currentTime = System.currentTimeMillis()
+        val isRecent = lastCheckAt > 0L &&
+            currentTime - lastCheckAt <= 30000L
+
+        when {
+            !serviceRunning -> {
+                connectionStatusText.text =
+                    "Device activated. Gateway service is not running."
+            }
+
+            !isRecent -> {
+                connectionStatusText.text =
+                    "Device activated. Waiting for a fresh server connection check."
+            }
+
+            serverState == STATE_CONNECTED -> {
+                connectionStatusText.text =
+                    "Device activated. Server connection confirmed by gateway polling."
+            }
+
+            serverState == STATE_FAILED -> {
+                connectionStatusText.text =
+                    "Device activated, but server connection failed. Retrying..."
+            }
+
+            else -> {
+                connectionStatusText.text =
+                    "Device activated. Connecting to server..."
+            }
+        }
+    }
+
+    private fun setServerState(state: String) {
+        getSharedPreferences(
+            statusPrefsName,
+            MODE_PRIVATE
+        ).edit()
+            .putString(PREF_SERVER_STATE, state)
+            .putLong(PREF_SERVER_CHECK_AT, System.currentTimeMillis())
+            .apply()
+    }
+
+    override fun onResume() {
+        super.onResume()
+
+        if (::activationStatusText.isInitialized) {
+            updateActivationStatus()
         }
     }
 }
