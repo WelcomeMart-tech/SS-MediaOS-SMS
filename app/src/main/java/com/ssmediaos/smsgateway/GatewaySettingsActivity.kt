@@ -2,12 +2,17 @@ package com.ssmediaos.smsgateway
 
 import android.app.Activity
 import android.os.Bundle
+import android.view.View
 import android.widget.Button
 import android.widget.EditText
 import android.widget.TextView
 import android.widget.Toast
+import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
+import java.io.BufferedReader
+import java.io.InputStreamReader
+import java.io.OutputStreamWriter
 
 class GatewaySettingsActivity : Activity() {
 
@@ -15,8 +20,10 @@ class GatewaySettingsActivity : Activity() {
     private lateinit var apiTokenInput: EditText
     private lateinit var deviceIdInput: EditText
     private lateinit var connectionStatusText: TextView
+    private lateinit var activationStatusText: TextView
     private lateinit var saveSettingsButton: Button
     private lateinit var testConnectionButton: Button
+    private lateinit var activateDeviceButton: Button
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -28,6 +35,9 @@ class GatewaySettingsActivity : Activity() {
         connectionStatusText = findViewById(R.id.connectionStatusText)
         saveSettingsButton = findViewById(R.id.saveSettingsButton)
         testConnectionButton = findViewById(R.id.testConnectionButton)
+        activateDeviceButton = findViewById(R.id.activateDeviceButton)
+
+        activationStatusText = findViewById(R.id.activationStatusText)
 
         loadSettings()
 
@@ -37,6 +47,10 @@ class GatewaySettingsActivity : Activity() {
 
         testConnectionButton.setOnClickListener {
             testConnection()
+        }
+
+        activateDeviceButton.setOnClickListener {
+            activateDevice()
         }
     }
 
@@ -99,13 +113,14 @@ class GatewaySettingsActivity : Activity() {
                 return false
             }
 
+            updateActivationStatus()
+
             Toast.makeText(
                 this,
                 "Settings saved successfully",
                 Toast.LENGTH_SHORT
             ).show()
 
-            updateActivationStatus()
             true
         } catch (e: Exception) {
             connectionStatusText.text =
@@ -156,13 +171,167 @@ class GatewaySettingsActivity : Activity() {
         }.start()
     }
 
+    private fun activateDevice() {
+        if (!saveSettings()) return
+
+        activateDeviceButton.isEnabled = false
+        activateDeviceButton.text = "Activating..."
+        activationStatusText.text = "Device status: ACTIVATION IN PROGRESS"
+        connectionStatusText.text = "Sending activation request to server..."
+
+        val serverUrl = serverUrlInput.text.toString()
+            .trim()
+            .trimEnd('/')
+
+        val deviceCode = deviceIdInput.text.toString().trim()
+        val activationToken = apiTokenInput.text.toString().trim()
+
+        Thread {
+            var success = false
+            var message = "Activation failed."
+
+            try {
+                val endpoint =
+                    "$serverUrl/api/v1/sms/device_activate.php"
+
+                val connection = URL(endpoint)
+                    .openConnection() as HttpURLConnection
+
+                connection.requestMethod = "POST"
+                connection.connectTimeout = 15000
+                connection.readTimeout = 20000
+                connection.doOutput = true
+                connection.useCaches = false
+                connection.setRequestProperty(
+                    "Content-Type",
+                    "application/json; charset=UTF-8"
+                )
+                connection.setRequestProperty(
+                    "Accept",
+                    "application/json"
+                )
+
+                val requestBody = JSONObject().apply {
+                    put("deviceCode", deviceCode)
+                    put("activationToken", activationToken)
+                }.toString()
+
+                try {
+                    OutputStreamWriter(
+                        connection.outputStream,
+                        Charsets.UTF_8
+                    ).use { writer ->
+                        writer.write(requestBody)
+                        writer.flush()
+                    }
+
+                    val statusCode = connection.responseCode
+
+                    val responseStream = if (statusCode in 200..299) {
+                        connection.inputStream
+                    } else {
+                        connection.errorStream
+                    }
+
+                    val responseText = responseStream?.use { stream ->
+                        BufferedReader(
+                            InputStreamReader(stream, Charsets.UTF_8)
+                        ).use { reader ->
+                            reader.readText()
+                        }
+                    }.orEmpty()
+
+                    val response = try {
+                        JSONObject(responseText)
+                    } catch (_: Exception) {
+                        JSONObject()
+                    }
+
+                    val serverMessage = response.optString(
+                        "message",
+                        "Server returned HTTP $statusCode"
+                    )
+
+                    val deviceToken = response.optString(
+                        "deviceToken",
+                        ""
+                    ).trim()
+
+                    if (
+                        statusCode in 200..299 &&
+                        response.optBoolean("ok", false) &&
+                        deviceToken.isNotBlank()
+                    ) {
+                        val savedToken = SecureConfig.saveDeviceToken(
+                            this,
+                            deviceToken
+                        )
+
+                        if (savedToken) {
+                            success = true
+                            message = "Device activated successfully."
+                        } else {
+                            SecureConfig.clearDeviceToken(this)
+                            message =
+                                "Activation succeeded, but the device token could not be saved."
+                        }
+                    } else {
+                        message = serverMessage
+                        if (statusCode !in 200..299) {
+                            message += " (HTTP $statusCode)"
+                        }
+                    }
+                } finally {
+                    connection.disconnect()
+                }
+            } catch (e: Exception) {
+                message = "Activation error: ${e.message ?: "Network error"}"
+            }
+
+            runOnUiThread {
+                activateDeviceButton.isEnabled = true
+                activateDeviceButton.text = "Activate Device"
+
+                connectionStatusText.text = message
+
+                if (success) {
+                    activationStatusText.text =
+                        "Device status: ACTIVATED"
+
+                    Toast.makeText(
+                        this,
+                        "Device activated successfully",
+                        Toast.LENGTH_LONG
+                    ).show()
+                } else {
+                    activationStatusText.text =
+                        "Device status: NOT ACTIVATED"
+
+                    Toast.makeText(
+                        this,
+                        message,
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+            }
+        }.start()
+    }
+
     private fun updateActivationStatus() {
         val deviceToken = SecureConfig.getDeviceToken(this)
 
-        connectionStatusText.text = if (deviceToken.isNullOrBlank()) {
-            "NOT ACTIVATED — Device activation is required."
+        if (deviceToken.isNullOrBlank()) {
+            activationStatusText.text =
+                "Device status: NOT ACTIVATED"
+
+            connectionStatusText.text =
+                "Device activation is required."
         } else {
-            "ACTIVATED"
+            activationStatusText.text =
+                "Device status: ACTIVATED"
+
+            connectionStatusText.text =
+                "Device token is saved on this device."
         }
     }
 }
