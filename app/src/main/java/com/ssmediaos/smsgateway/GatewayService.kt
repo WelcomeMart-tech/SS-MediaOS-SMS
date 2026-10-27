@@ -265,15 +265,15 @@ class GatewayService : Service() {
 
         val serverUrl = SecureConfig.getServerUrl(this)
         val deviceCode = SecureConfig.getDeviceCode(this)
-        val activationToken = SecureConfig.getActivationToken(this)
+        val companyApiKey = SecureConfig.getCompanyApiKey(this)
         val deviceToken = SecureConfig.getDeviceToken(this)
 
         if (
             serverUrl.isNullOrBlank() ||
             deviceCode.isNullOrBlank() ||
-            activationToken.isNullOrBlank()
+            companyApiKey.isNullOrBlank()
         ) {
-            Log.w(TAG, "Gateway start blocked: activation settings missing")
+            Log.w(TAG, "Gateway start blocked: required settings missing")
 
             saveServiceRunning(false)
             setServerState(STATE_FAILED)
@@ -419,8 +419,7 @@ class GatewayService : Service() {
 
                     Log.e(
                         TAG,
-                        "Gateway polling failed: ${exception.message}",
-                        exception
+                        "Gateway polling failed (${exception.javaClass.simpleName})"
                     )
 
                     setServerState(STATE_FAILED)
@@ -583,8 +582,7 @@ class GatewayService : Service() {
 
                     Log.e(
                         TAG,
-                        "Could not report result for job $jobId",
-                        exception
+                        "Could not report result for job $jobId (${exception.javaClass.simpleName})"
                     )
 
                     requestInProgress = false
