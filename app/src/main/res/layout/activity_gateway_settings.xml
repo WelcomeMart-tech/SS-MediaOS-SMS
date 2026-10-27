@@ -11,7 +11,7 @@
         android:orientation="vertical"
         android:padding="20dp">
 
-        <!-- Screen Title -->
+        <!-- Screen Heading -->
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -43,8 +43,8 @@
                 android:layout_height="wrap_content"
                 android:text="Server URL"
                 android:textColor="#1E293B"
-                android:textStyle="bold"
-                android:textSize="15sp" />
+                android:textSize="15sp"
+                android:textStyle="bold" />
 
             <EditText
                 android:id="@+id/serverUrlInput"
@@ -63,8 +63,8 @@
                 android:layout_marginTop="20dp"
                 android:text="Activation Token"
                 android:textColor="#1E293B"
-                android:textStyle="bold"
-                android:textSize="15sp" />
+                android:textSize="15sp"
+                android:textStyle="bold" />
 
             <EditText
                 android:id="@+id/apiTokenInput"
@@ -83,8 +83,8 @@
                 android:layout_marginTop="20dp"
                 android:text="Device ID"
                 android:textColor="#1E293B"
-                android:textStyle="bold"
-                android:textSize="15sp" />
+                android:textSize="15sp"
+                android:textStyle="bold" />
 
             <EditText
                 android:id="@+id/deviceIdInput"
@@ -96,7 +96,7 @@
                 android:singleLine="true"
                 android:autofillHints="username" />
 
-            <!-- Save Settings -->
+            <!-- Save Settings Button -->
             <Button
                 android:id="@+id/saveSettingsButton"
                 android:layout_width="match_parent"
@@ -105,7 +105,7 @@
                 android:text="Save Settings"
                 android:textAllCaps="false" />
 
-            <!-- Test Connection -->
+            <!-- Test Connection Button -->
             <Button
                 android:id="@+id/testConnectionButton"
                 android:layout_width="match_parent"
@@ -114,17 +114,17 @@
                 android:text="Test Server Connection"
                 android:textAllCaps="false" />
 
-            <!-- Activate Device -->
+            <!-- Activate Device Button -->
             <Button
                 android:id="@+id/activateDeviceButton"
                 android:layout_width="match_parent"
                 android:layout_height="54dp"
                 android:layout_marginTop="10dp"
+                android:backgroundTint="#0F766E"
                 android:text="Activate Device"
                 android:textAllCaps="false"
-                android:textStyle="bold"
-                android:backgroundTint="#0F766E"
-                android:textColor="#FFFFFF" />
+                android:textColor="#FFFFFF"
+                android:textStyle="bold" />
 
             <!-- Connection Status -->
             <TextView
@@ -142,12 +142,12 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="10dp"
-                android:padding="12dp"
                 android:background="#F1F5F9"
+                android:padding="12dp"
                 android:text="Device status: NOT ACTIVATED"
                 android:textColor="#B45309"
-                android:textStyle="bold"
-                android:textSize="14sp" />
+                android:textSize="14sp"
+                android:textStyle="bold" />
 
         </LinearLayout>
 
@@ -157,7 +157,7 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="18dp"
             android:gravity="center"
-            android:text="Owner: SS MediaOS  • 
+            android:text="Owner: SS MediaOS  -  Developer: Shivam Yadav"
             android:textColor="#64748B"
             android:textSize="12sp" />
 
