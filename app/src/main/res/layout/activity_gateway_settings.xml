@@ -36,6 +36,17 @@
             android:padding="20dp"
             android:background="#FFFFFF">
 
+            <!-- Keep this view because GatewaySettingsActivity.kt references its ID.
+                 It remains hidden from users; the app sets the server URL internally. -->
+            <EditText
+                android:id="@+id/serverUrlInput"
+                android:layout_width="1dp"
+                android:layout_height="1dp"
+                android:visibility="gone"
+                android:importantForAutofill="no"
+                android:inputType="textUri"
+                android:singleLine="true" />
+
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
