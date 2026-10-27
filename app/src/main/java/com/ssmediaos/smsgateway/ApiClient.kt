@@ -14,6 +14,9 @@ object ApiClient {
     private const val CONNECT_TIMEOUT = 15000
     private const val READ_TIMEOUT = 15000
 
+    private const val DEFAULT_SERVER_URL =
+        "https://otp.ssmediaos.in"
+
     private const val DEVICE_ACTIVATE_PATH =
         "/api/v1/sms/device_activate.php"
 
@@ -24,9 +27,14 @@ object ApiClient {
         "/api/v1/sms/device_result.php"
 
     /**
-     * Activate the registered Android gateway device.
+     * Activate a registered Android gateway device.
      *
-     * Server response must contain:
+     * IMPORTANT:
+     * - Device ID is read dynamically from SecureConfig.
+     * - Company API token is read from SecureConfig.
+     * - Activation secret must match the server configuration.
+     *
+     * Expected server response:
      * {
      *   "ok": true,
      *   "deviceToken": "server-issued-token"
@@ -40,20 +48,28 @@ object ApiClient {
                 val context = AppContextHolder.context
 
                 val serverUrl = SecureConfig.getServerUrl(context)
-                    ?: throw IOException("Server URL is not configured.")
+                    ?.trim()
+                    ?.takeIf { it.isNotEmpty() }
+                    ?: DEFAULT_SERVER_URL
 
                 val deviceCode = SecureConfig.getDeviceCode(context)
                     ?.trim()
                     ?.takeIf { it.isNotEmpty() }
-                    ?: throw IOException("Device Code is not configured.")
+                    ?: throw IOException(
+                        "Device ID is unavailable. Please check device configuration."
+                    )
 
-                val activationToken =
-                    SecureConfig.getActivationToken(context)
+                val companyApiKey =
+                    SecureConfig.getCompanyApiKey(context)
                         ?.trim()
                         ?.takeIf { it.isNotEmpty() }
                         ?: throw IOException(
-                            "Activation Token is not configured."
+                            "Please enter your Company API Token in settings."
                         )
+
+                val body = JSONObject()
+                    .put("deviceCode", deviceCode)
+                    .put("companyApiKey", companyApiKey)
 
                 val response = request(
                     endpoint = buildEndpoint(
@@ -61,12 +77,10 @@ object ApiClient {
                         DEVICE_ACTIVATE_PATH
                     ),
                     method = "POST",
-                    body = JSONObject()
-                        .put("deviceCode", deviceCode)
-                        .put("activationToken", activationToken)
+                    body = body
                 )
 
-                if (!response.optBoolean("ok", true)) {
+                if (!response.optBoolean("ok", false)) {
                     throw IOException(
                         response.optString(
                             "message",
@@ -80,13 +94,13 @@ object ApiClient {
 
                 if (deviceToken.isBlank()) {
                     throw IOException(
-                        "Activation response did not contain a device token."
+                        "Server activation response did not contain a device token."
                     )
                 }
 
                 if (!SecureConfig.saveDeviceToken(context, deviceToken)) {
                     throw IOException(
-                        "Server activated the device, but the token could not be saved."
+                        "Activation succeeded, but the device token could not be saved."
                     )
                 }
 
@@ -99,7 +113,6 @@ object ApiClient {
 
     /**
      * Poll the server for one queued SMS job.
-     * Authentication header: X-Gateway-Token
      */
     fun pollGatewayJob(
         callback: (Result<JSONObject>) -> Unit
@@ -108,15 +121,8 @@ object ApiClient {
             val result = runCatching {
                 val context = AppContextHolder.context
 
-                val serverUrl = SecureConfig.getServerUrl(context)
-                    ?: throw IOException("Server URL is not configured.")
-
-                val deviceToken = SecureConfig.getDeviceToken(context)
-                    ?.trim()
-                    ?.takeIf { it.isNotEmpty() }
-                    ?: throw IOException(
-                        "Device is not activated. Activate it first."
-                    )
+                val serverUrl = getServerUrl(context)
+                val deviceToken = getDeviceToken(context)
 
                 val response = request(
                     endpoint = buildEndpoint(
@@ -128,14 +134,7 @@ object ApiClient {
                     body = JSONObject()
                 )
 
-                if (!response.optBoolean("ok", false)) {
-                    throw IOException(
-                        response.optString(
-                            "message",
-                            "Gateway polling failed."
-                        )
-                    )
-                }
+                ensureSuccess(response, "Gateway polling failed.")
 
                 response
             }
@@ -145,7 +144,7 @@ object ApiClient {
     }
 
     /**
-     * Submit the SMS job result to the server.
+     * Submit the result of an SMS job.
      */
     fun submitGatewayResult(
         jobId: Long,
@@ -166,16 +165,8 @@ object ApiClient {
                 }
 
                 val context = AppContextHolder.context
-
-                val serverUrl = SecureConfig.getServerUrl(context)
-                    ?: throw IOException("Server URL is not configured.")
-
-                val deviceToken = SecureConfig.getDeviceToken(context)
-                    ?.trim()
-                    ?.takeIf { it.isNotEmpty() }
-                    ?: throw IOException(
-                        "Device is not activated. Activate it first."
-                    )
+                val serverUrl = getServerUrl(context)
+                val deviceToken = getDeviceToken(context)
 
                 val body = JSONObject()
                     .put("job_id", jobId)
@@ -194,14 +185,10 @@ object ApiClient {
                     body = body
                 )
 
-                if (!response.optBoolean("ok", false)) {
-                    throw IOException(
-                        response.optString(
-                            "message",
-                            "Failed to submit SMS result."
-                        )
-                    )
-                }
+                ensureSuccess(
+                    response,
+                    "Failed to submit SMS result."
+                )
 
                 response
             }
@@ -211,7 +198,7 @@ object ApiClient {
     }
 
     /**
-     * Existing unauthenticated GET method retained.
+     * Existing unauthenticated GET method retained for compatibility.
      */
     fun get(
         endpoint: String,
@@ -219,9 +206,8 @@ object ApiClient {
     ) {
         executor.execute {
             val result = runCatching {
-                val serverUrl = SecureConfig.getServerUrl(
-                    AppContextHolder.context
-                ) ?: throw IOException("Server URL is not configured.")
+                val context = AppContextHolder.context
+                val serverUrl = getServerUrl(context)
 
                 request(
                     endpoint = buildEndpoint(serverUrl, endpoint),
@@ -234,7 +220,7 @@ object ApiClient {
     }
 
     /**
-     * Existing GET method using Bearer authentication.
+     * Existing GET method using device-token authentication.
      */
     fun getConfigured(
         endpoint: String,
@@ -243,16 +229,8 @@ object ApiClient {
         executor.execute {
             val result = runCatching {
                 val context = AppContextHolder.context
-
-                val serverUrl = SecureConfig.getServerUrl(context)
-                    ?: throw IOException("Server URL is not configured.")
-
-                val deviceToken = SecureConfig.getDeviceToken(context)
-                    ?.trim()
-                    ?.takeIf { it.isNotEmpty() }
-                    ?: throw IOException(
-                        "Device is not activated. Activate it first."
-                    )
+                val serverUrl = getServerUrl(context)
+                val deviceToken = getDeviceToken(context)
 
                 request(
                     endpoint = buildEndpoint(serverUrl, endpoint),
@@ -266,7 +244,7 @@ object ApiClient {
     }
 
     /**
-     * Existing POST method using Bearer authentication.
+     * Existing POST method using device-token authentication.
      */
     fun postConfigured(
         endpoint: String,
@@ -276,16 +254,8 @@ object ApiClient {
         executor.execute {
             val result = runCatching {
                 val context = AppContextHolder.context
-
-                val serverUrl = SecureConfig.getServerUrl(context)
-                    ?: throw IOException("Server URL is not configured.")
-
-                val deviceToken = SecureConfig.getDeviceToken(context)
-                    ?.trim()
-                    ?.takeIf { it.isNotEmpty() }
-                    ?: throw IOException(
-                        "Device is not activated. Activate it first."
-                    )
+                val serverUrl = getServerUrl(context)
+                val deviceToken = getDeviceToken(context)
 
                 request(
                     endpoint = buildEndpoint(serverUrl, endpoint),
@@ -319,6 +289,36 @@ object ApiClient {
             }
 
             callbackSafely(callback, result)
+        }
+    }
+
+    private fun getServerUrl(context: android.content.Context): String {
+        return SecureConfig.getServerUrl(context)
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+            ?: DEFAULT_SERVER_URL
+    }
+
+    private fun getDeviceToken(
+        context: android.content.Context
+    ): String {
+        return SecureConfig.getDeviceToken(context)
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+            ?: throw IOException(
+                "Device is not activated. Please activate it first."
+            )
+    }
+
+    private fun ensureSuccess(
+        response: JSONObject,
+        defaultMessage: String
+    ) {
+        if (!response.optBoolean("ok", false)) {
+            throw IOException(
+                response.optString("message", defaultMessage)
+                    .ifBlank { defaultMessage }
+            )
         }
     }
 
@@ -491,9 +491,6 @@ object ApiClient {
         return "${base.toASCIIString()}/${path.trimStart('/')}"
     }
 
-    /**
-     * Prevent callback errors from terminating the worker.
-     */
     private fun <T> callbackSafely(
         callback: (Result<T>) -> Unit,
         result: Result<T>
@@ -501,7 +498,7 @@ object ApiClient {
         try {
             callback(result)
         } catch (_: Exception) {
-            // Callback exceptions must not terminate the worker.
+            // Prevent callback exceptions from terminating the worker.
         }
     }
 }
