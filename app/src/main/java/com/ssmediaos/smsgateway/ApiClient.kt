@@ -81,11 +81,9 @@ object ApiClient {
                 )
 
                 if (!response.optBoolean("ok", false)) {
+                    // Do not display arbitrary server diagnostics in the app UI.
                     throw IOException(
-                        response.optString(
-                            "message",
-                            "Device activation failed."
-                        )
+                        "Device activation was rejected. Check the Company API Key and server configuration."
                     )
                 }
 
@@ -315,10 +313,8 @@ object ApiClient {
         defaultMessage: String
     ) {
         if (!response.optBoolean("ok", false)) {
-            throw IOException(
-                response.optString("message", defaultMessage)
-                    .ifBlank { defaultMessage }
-            )
+            // Server-provided error text may contain internal implementation details.
+            throw IOException(defaultMessage)
         }
     }
 
@@ -341,11 +337,24 @@ object ApiClient {
         }
 
         if (!parsedUrl.protocol.equals("https", ignoreCase = true)) {
-            throw IOException("HTTPS is required for API requests.")
+            throw IOException("Secure connection required. Please try again.")
         }
 
         if (parsedUrl.userInfo != null) {
-            throw IOException("API URL must not contain credentials.")
+            throw IOException("Invalid server configuration.")
+        }
+
+        // This app is intended to communicate only with the configured SS MediaOS API.
+        // This also protects the explicit-credentials compatibility overload from
+        // accidentally sending tokens to a different HTTPS host.
+        val expectedHost = URI(DEFAULT_SERVER_URL).host
+        if (!parsedUrl.host.equals(expectedHost, ignoreCase = true) ||
+            (parsedUrl.port != -1 && parsedUrl.port != 443)) {
+            throw IOException("Unrecognized server. Check the app configuration.")
+        }
+
+        if (method != "GET" && method != "POST") {
+            throw IOException("Unsupported API request.")
         }
 
         val connection = (
@@ -408,27 +417,9 @@ object ApiClient {
                 ?: ""
 
             if (responseCode !in 200..299) {
-                val serverMessage = try {
-                    val json = JSONObject(responseBody)
-                    json.optString(
-                        "message",
-                        json.optString(
-                            "error",
-                            json.optString("detail", "")
-                        )
-                    )
-                } catch (_: Exception) {
-                    ""
-                }
-
-                val detail = if (serverMessage.isNotBlank()) {
-                    ": $serverMessage"
-                } else {
-                    ""
-                }
-
+                // Keep server diagnostics out of user-visible errors.
                 throw IOException(
-                    "Server returned HTTP $responseCode$detail"
+                    "Server request failed (HTTP $responseCode). Please try again."
                 )
             }
 
@@ -464,7 +455,9 @@ object ApiClient {
 
         require(
             !path.startsWith("//") &&
-                !path.contains('\\')
+                !path.contains('\\') &&
+                !path.contains("\r") &&
+                !path.contains("\n")
         ) {
             "Invalid API endpoint."
         }
