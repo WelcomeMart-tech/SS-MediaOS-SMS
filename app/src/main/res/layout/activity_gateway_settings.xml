@@ -1,4 +1,3 @@
-
 <?xml version="1.0" encoding="utf-8"?>
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
@@ -12,6 +11,7 @@
         android:orientation="vertical"
         android:padding="20dp">
 
+        <!-- Screen Title -->
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -29,6 +29,7 @@
             android:textColor="#64748B"
             android:textSize="14sp" />
 
+        <!-- Settings Card -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -36,6 +37,7 @@
             android:padding="18dp"
             android:background="#FFFFFF">
 
+            <!-- Server URL -->
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
@@ -54,6 +56,7 @@
                 android:singleLine="true"
                 android:autofillHints="url" />
 
+            <!-- Activation Token -->
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
@@ -73,6 +76,7 @@
                 android:singleLine="true"
                 android:autofillHints="password" />
 
+            <!-- Device ID -->
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
@@ -92,6 +96,7 @@
                 android:singleLine="true"
                 android:autofillHints="username" />
 
+            <!-- Save Settings -->
             <Button
                 android:id="@+id/saveSettingsButton"
                 android:layout_width="match_parent"
@@ -100,6 +105,7 @@
                 android:text="Save Settings"
                 android:textAllCaps="false" />
 
+            <!-- Test Connection -->
             <Button
                 android:id="@+id/testConnectionButton"
                 android:layout_width="match_parent"
@@ -108,6 +114,7 @@
                 android:text="Test Server Connection"
                 android:textAllCaps="false" />
 
+            <!-- Activate Device -->
             <Button
                 android:id="@+id/activateDeviceButton"
                 android:layout_width="match_parent"
@@ -119,6 +126,7 @@
                 android:backgroundTint="#0F766E"
                 android:textColor="#FFFFFF" />
 
+            <!-- Connection Status -->
             <TextView
                 android:id="@+id/connectionStatusText"
                 android:layout_width="match_parent"
@@ -128,6 +136,7 @@
                 android:textColor="#64748B"
                 android:textSize="14sp" />
 
+            <!-- Activation Status -->
             <TextView
                 android:id="@+id/activationStatusText"
                 android:layout_width="match_parent"
@@ -142,12 +151,13 @@
 
         </LinearLayout>
 
+        <!-- Footer -->
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="18dp"
-            android:text="Owner: SS MediaOS  •  Developer: Shivam Yadav"
             android:gravity="center"
+            android:text="Owner: SS MediaOS  • 
             android:textColor="#64748B"
             android:textSize="12sp" />
 
