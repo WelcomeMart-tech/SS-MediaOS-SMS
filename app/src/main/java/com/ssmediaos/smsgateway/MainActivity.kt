@@ -93,7 +93,6 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER_VERTICAL
         }
 
-        // Use the existing vector logo when available.
         val logo = TextView(this).apply {
             text = "SMS"
             textSize = 19f
@@ -205,7 +204,7 @@ class MainActivity : Activity() {
         val connectionCard = createStatCard(
             "SERVER",
             "CHECKING",
-            "Configuration status",
+            "Live connection status",
             blue
         )
 
@@ -321,7 +320,8 @@ class MainActivity : Activity() {
 
         smsCard.addView(
             textView(
-                "Use the authorized gateway to send business messages. This app does not access your incoming SMS inbox.",
+                "Use the authorized gateway to send business messages. " +
+                    "This app does not access your incoming SMS inbox.",
                 13f,
                 textMuted,
                 false
@@ -361,7 +361,8 @@ class MainActivity : Activity() {
 
         settingsCard.addView(
             textView(
-                "Configure the SS MediaOS server and activate this device before sending SMS.",
+                "Configure the SS MediaOS server and activate this device " +
+                    "before sending SMS.",
                 13f,
                 textMuted,
                 false
@@ -538,6 +539,7 @@ class MainActivity : Activity() {
                 "SMS PERMISSION" -> "value_SMS_PERMISSION"
                 else -> "value_$label"
             }
+
             setPadding(0, dp(10), 0, dp(4))
         }
 
@@ -625,6 +627,7 @@ class MainActivity : Activity() {
             isAllCaps = false
             background = roundedBackground(color, 12)
             setPadding(dp(12), dp(6), dp(12), dp(6))
+
             setOnClickListener {
                 onClick()
             }
@@ -699,18 +702,31 @@ class MainActivity : Activity() {
         val activationToken = SecureConfig.getActivationToken(this)
         val deviceToken = SecureConfig.getDeviceToken(this)
 
-        if (serverUrl.isNullOrBlank() ||
+        if (
+            serverUrl.isNullOrBlank() ||
             deviceCode.isNullOrBlank() ||
             activationToken.isNullOrBlank()
         ) {
-            updateStatus("Complete Gateway Settings before starting the gateway.")
-            showToast("Please save the server URL, Device Code and Activation Token first.")
+            updateStatus(
+                "Complete Gateway Settings before starting the gateway."
+            )
+
+            showToast(
+                "Please save the server URL, Device Code and " +
+                    "Activation Token first."
+            )
             return
         }
 
         if (deviceToken.isNullOrBlank()) {
-            updateStatus("This device is not activated yet. Activate it in Gateway Settings.")
-            showToast("Activate this device before starting the gateway.")
+            updateStatus(
+                "This device is not activated yet. " +
+                    "Activate it in Gateway Settings."
+            )
+
+            showToast(
+                "Activate this device before starting the gateway."
+            )
             return
         }
 
@@ -729,9 +745,13 @@ class MainActivity : Activity() {
             }
 
             gatewayStartRequested = true
-            updateStatus("Gateway service start requested.")
+
+            updateStatus(
+                "Gateway service start requested. Waiting for server response."
+            )
         } catch (e: Exception) {
             gatewayStartRequested = false
+
             updateStatus(
                 "Could not start service: ${e.localizedMessage}"
             )
@@ -770,6 +790,17 @@ class MainActivity : Activity() {
         }
     }
 
+    /**
+     * SERVER status is based on the latest result recorded by GatewayService.
+     *
+     * A saved device token alone does not mean the server is currently reachable.
+     * GatewayService must write these preferences after its actual polling result:
+     *
+     * ss_mediaos_gateway_status:
+     *   service_running  : Boolean
+     *   server_state     : CONNECTED / FAILED / CONNECTING
+     *   server_check_at  : Long (System.currentTimeMillis())
+     */
     private fun updateStatus(message: String? = null) {
         val smsGranted =
             checkSelfPermission(Manifest.permission.SEND_SMS) ==
@@ -779,6 +810,85 @@ class MainActivity : Activity() {
         val deviceCode = SecureConfig.getDeviceCode(this)
         val activationToken = SecureConfig.getActivationToken(this)
         val deviceToken = SecureConfig.getDeviceToken(this)
+
+        val serverPrefs = getSharedPreferences(
+            SERVER_STATUS_PREFS,
+            MODE_PRIVATE
+        )
+
+        val serviceRunning = serverPrefs.getBoolean(
+            PREF_SERVICE_RUNNING,
+            false
+        )
+
+        val serverState = serverPrefs.getString(
+            PREF_SERVER_STATE,
+            SERVER_STATE_CONNECTING
+        ) ?: SERVER_STATE_CONNECTING
+
+        val lastCheckAt = serverPrefs.getLong(
+            PREF_SERVER_CHECK_AT,
+            0L
+        )
+
+        val now = System.currentTimeMillis()
+
+        val hasServerConfiguration =
+            !serverUrl.isNullOrBlank() &&
+                !deviceCode.isNullOrBlank() &&
+                !activationToken.isNullOrBlank()
+
+        val hasDeviceActivation = !deviceToken.isNullOrBlank()
+
+        // Do not treat a saved token as proof of a live connection.
+        val checkIsFresh =
+            lastCheckAt > 0L &&
+                now >= lastCheckAt &&
+                now - lastCheckAt <= STATUS_FRESHNESS_MS
+
+        val serverStatus = when {
+            !hasServerConfiguration -> {
+                "NOT ACTIVATED"
+            }
+
+            !hasDeviceActivation -> {
+                "NOT ACTIVATED"
+            }
+
+            serviceRunning &&
+                checkIsFresh &&
+                serverState.equals(
+                    SERVER_STATE_CONNECTED,
+                    ignoreCase = true
+                ) -> {
+                "ACTIVATED"
+            }
+
+            serviceRunning &&
+                checkIsFresh &&
+                serverState.equals(
+                    SERVER_STATE_FAILED,
+                    ignoreCase = true
+                ) -> {
+                "CONNECTION FAILED"
+            }
+
+            serviceRunning -> {
+                "CONNECTING"
+            }
+
+            checkIsFresh &&
+                serverState.equals(
+                    SERVER_STATE_FAILED,
+                    ignoreCase = true
+                ) -> {
+                "CONNECTION FAILED"
+            }
+
+            else -> {
+                "CONNECTING"
+            }
+        }
 
         serverText.text =
             "Server: ${serverUrl ?: "Not configured"}"
@@ -791,6 +901,7 @@ class MainActivity : Activity() {
 
         statusText.text = buildString {
             appendLine("App Status: Running")
+
             appendLine(
                 if (smsGranted) {
                     "SMS sending permission is granted."
@@ -799,22 +910,34 @@ class MainActivity : Activity() {
                 }
             )
 
+            appendLine("Server Status: $serverStatus")
+
+            if (lastCheckAt > 0L) {
+                appendLine(
+                    "Last server check: " +
+                        android.text.format.DateFormat.format(
+                            "dd MMM yyyy, hh:mm:ss a",
+                            lastCheckAt
+                        )
+                )
+            } else {
+                appendLine("Last server check: Not available yet")
+            }
+
             if (message != null) {
                 appendLine()
                 append(message)
             }
         }
 
+        // Dashboard SERVER card
         val serverValue = content.findViewWithTag<TextView>(
             "value_SERVER"
         )
 
-        serverValue?.text = when {
-            serverUrl.isNullOrBlank() -> "NOT SET"
-            deviceToken.isNullOrBlank() -> "NOT ACTIVATED"
-            else -> "ACTIVATED"
-        }
+        serverValue?.text = serverStatus
 
+        // Dashboard permission card
         val permissionValue = content.findViewWithTag<TextView>(
             "value_SMS_PERMISSION"
         )
@@ -827,10 +950,10 @@ class MainActivity : Activity() {
 
         gatewayText.text = buildString {
             appendLine(
-                if (gatewayStartRequested) {
-                    "Gateway start has been requested."
+                if (serviceRunning || gatewayStartRequested) {
+                    "Gateway service is running or starting."
                 } else {
-                    "Gateway service controls"
+                    "Gateway service is stopped."
                 }
             )
 
@@ -850,16 +973,24 @@ class MainActivity : Activity() {
                 }
             )
 
-            append(
+            appendLine(
                 when {
-                    deviceCode.isNullOrBlank() || activationToken.isNullOrBlank() ->
+                    deviceCode.isNullOrBlank() ||
+                        activationToken.isNullOrBlank() -> {
                         "Device Code and Activation Token are not configured."
-                    deviceToken.isNullOrBlank() ->
+                    }
+
+                    deviceToken.isNullOrBlank() -> {
                         "Device is not activated. Activate it in Gateway Settings."
-                    else ->
-                        "Device activation token is available."
+                    }
+
+                    else -> {
+                        "Device activation token is saved."
+                    }
                 }
             )
+
+            append("Server connection: $serverStatus")
         }
     }
 
@@ -876,5 +1007,30 @@ class MainActivity : Activity() {
 
     companion object {
         private const val PERMISSION_REQUEST_CODE = 1001
+
+        // These names must match the values written by GatewayService.kt.
+        private const val SERVER_STATUS_PREFS =
+            "ss_mediaos_gateway_status"
+
+        private const val PREF_SERVICE_RUNNING =
+            "service_running"
+
+        private const val PREF_SERVER_STATE =
+            "server_state"
+
+        private const val PREF_SERVER_CHECK_AT =
+            "server_check_at"
+
+        private const val SERVER_STATE_CONNECTED =
+            "CONNECTED"
+
+        private const val SERVER_STATE_FAILED =
+            "FAILED"
+
+        private const val SERVER_STATE_CONNECTING =
+            "CONNECTING"
+
+        // A server check older than 30 seconds is considered stale.
+        private const val STATUS_FRESHNESS_MS = 30_000L
     }
 }
