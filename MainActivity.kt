@@ -93,7 +93,6 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER_VERTICAL
         }
 
-        // Use the existing vector logo when available.
         val logo = TextView(this).apply {
             text = "SMS"
             textSize = 19f
@@ -321,7 +320,8 @@ class MainActivity : Activity() {
 
         smsCard.addView(
             textView(
-                "Use the authorized gateway to send business messages. This app does not access your incoming SMS inbox.",
+                "Use the authorized gateway to send business messages. " +
+                    "This app does not access your incoming SMS inbox.",
                 13f,
                 textMuted,
                 false
@@ -361,7 +361,8 @@ class MainActivity : Activity() {
 
         settingsCard.addView(
             textView(
-                "Configure the SS MediaOS server and activate this device before sending SMS.",
+                "Configure the SS MediaOS server and activate this " +
+                    "device before sending SMS.",
                 13f,
                 textMuted,
                 false
@@ -625,6 +626,7 @@ class MainActivity : Activity() {
             isAllCaps = false
             background = roundedBackground(color, 12)
             setPadding(dp(12), dp(6), dp(12), dp(6))
+
             setOnClickListener {
                 onClick()
             }
@@ -699,18 +701,29 @@ class MainActivity : Activity() {
         val activationToken = SecureConfig.getActivationToken(this)
         val deviceToken = SecureConfig.getDeviceToken(this)
 
-        if (serverUrl.isNullOrBlank() ||
+        if (
+            serverUrl.isNullOrBlank() ||
             deviceCode.isNullOrBlank() ||
             activationToken.isNullOrBlank()
         ) {
-            updateStatus("Complete Gateway Settings before starting the gateway.")
-            showToast("Please save the server URL, Device Code and Activation Token first.")
+            updateStatus(
+                "Complete Gateway Settings before starting the gateway."
+            )
+            showToast(
+                "Please save the server URL, Device Code and " +
+                    "Activation Token first."
+            )
             return
         }
 
         if (deviceToken.isNullOrBlank()) {
-            updateStatus("This device is not activated yet. Activate it in Gateway Settings.")
-            showToast("Activate this device before starting the gateway.")
+            updateStatus(
+                "This device is not activated yet. " +
+                    "Activate it in Gateway Settings."
+            )
+            showToast(
+                "Activate this device before starting the gateway."
+            )
             return
         }
 
@@ -764,7 +777,8 @@ class MainActivity : Activity() {
             )
         } catch (e: Exception) {
             showToast(
-                "Could not open Gateway Settings. Check AndroidManifest.xml. " +
+                "Could not open Gateway Settings. " +
+                    "Check AndroidManifest.xml. " +
                     (e.localizedMessage ?: "")
             )
         }
@@ -791,6 +805,7 @@ class MainActivity : Activity() {
 
         statusText.text = buildString {
             appendLine("App Status: Running")
+
             appendLine(
                 if (smsGranted) {
                     "SMS sending permission is granted."
@@ -852,10 +867,13 @@ class MainActivity : Activity() {
 
             append(
                 when {
-                    deviceCode.isNullOrBlank() || activationToken.isNullOrBlank() ->
+                    deviceCode.isNullOrBlank() ||
+                        activationToken.isNullOrBlank() ->
                         "Device Code and Activation Token are not configured."
+
                     deviceToken.isNullOrBlank() ->
                         "Device is not activated. Activate it in Gateway Settings."
+
                     else ->
                         "Device activation token is available."
                 }
