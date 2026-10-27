@@ -14,6 +14,9 @@ object ApiClient {
     private const val CONNECT_TIMEOUT = 15000
     private const val READ_TIMEOUT = 15000
 
+    private const val DEVICE_ACTIVATE_PATH =
+        "/api/v1/sms/device_activate.php"
+
     private const val DEVICE_POLL_PATH =
         "/api/v1/sms/device_poll.php"
 
@@ -21,10 +24,13 @@ object ApiClient {
         "/api/v1/sms/device_result.php"
 
     /**
-     * Activate a registered device.
+     * Activate the registered Android gateway device.
      *
-     * Activation endpoint is kept unchanged because its PHP
-     * implementation has not yet been verified.
+     * Server response must contain:
+     * {
+     *   "ok": true,
+     *   "deviceToken": "server-issued-token"
+     * }
      */
     fun activate(
         callback: (Result<JSONObject>) -> Unit
@@ -37,10 +43,14 @@ object ApiClient {
                     ?: throw IOException("Server URL is not configured.")
 
                 val deviceCode = SecureConfig.getDeviceCode(context)
+                    ?.trim()
+                    ?.takeIf { it.isNotEmpty() }
                     ?: throw IOException("Device Code is not configured.")
 
                 val activationToken =
                     SecureConfig.getActivationToken(context)
+                        ?.trim()
+                        ?.takeIf { it.isNotEmpty() }
                         ?: throw IOException(
                             "Activation Token is not configured."
                         )
@@ -48,13 +58,22 @@ object ApiClient {
                 val response = request(
                     endpoint = buildEndpoint(
                         serverUrl,
-                        "/v1/device/activate"
+                        DEVICE_ACTIVATE_PATH
                     ),
                     method = "POST",
                     body = JSONObject()
                         .put("deviceCode", deviceCode)
                         .put("activationToken", activationToken)
                 )
+
+                if (!response.optBoolean("ok", true)) {
+                    throw IOException(
+                        response.optString(
+                            "message",
+                            "Device activation failed."
+                        )
+                    )
+                }
 
                 val deviceToken = response.optString("deviceToken")
                     .trim()
@@ -67,7 +86,7 @@ object ApiClient {
 
                 if (!SecureConfig.saveDeviceToken(context, deviceToken)) {
                     throw IOException(
-                        "Device activated, but its token could not be saved."
+                        "Server activated the device, but the token could not be saved."
                     )
                 }
 
@@ -79,24 +98,8 @@ object ApiClient {
     }
 
     /**
-     * Poll the PHP server for one queued SMS job.
-     *
-     * PHP expects:
-     * X-Gateway-Token: <device token>
-     *
-     * Expected response:
-     * {
-     *   "ok": true,
-     *   "device": {...},
-     *   "job": {
-     *     "id": 123,
-     *     "request_id": "...",
-     *     "to": "+91...",
-     *     "message": "..."
-     *   }
-     * }
-     *
-     * If no job is available, job may be null.
+     * Poll the server for one queued SMS job.
+     * Authentication header: X-Gateway-Token
      */
     fun pollGatewayJob(
         callback: (Result<JSONObject>) -> Unit
@@ -142,18 +145,7 @@ object ApiClient {
     }
 
     /**
-     * Submit SMS sending result to the PHP server.
-     *
-     * PHP expects:
-     * {
-     *   "job_id": 123,
-     *   "request_id": "...",
-     *   "success": true,
-     *   "provider_message_id": "...",
-     *   "error_code": ""
-     * }
-     *
-     * Keep job_id and request_id from the polled job.
+     * Submit the SMS job result to the server.
      */
     fun submitGatewayResult(
         jobId: Long,
@@ -243,8 +235,6 @@ object ApiClient {
 
     /**
      * Existing GET method using Bearer authentication.
-     *
-     * Retained for compatibility with existing API endpoints.
      */
     fun getConfigured(
         endpoint: String,
@@ -258,6 +248,8 @@ object ApiClient {
                     ?: throw IOException("Server URL is not configured.")
 
                 val deviceToken = SecureConfig.getDeviceToken(context)
+                    ?.trim()
+                    ?.takeIf { it.isNotEmpty() }
                     ?: throw IOException(
                         "Device is not activated. Activate it first."
                     )
@@ -275,8 +267,6 @@ object ApiClient {
 
     /**
      * Existing POST method using Bearer authentication.
-     *
-     * Retained for compatibility with existing API endpoints.
      */
     fun postConfigured(
         endpoint: String,
@@ -291,6 +281,8 @@ object ApiClient {
                     ?: throw IOException("Server URL is not configured.")
 
                 val deviceToken = SecureConfig.getDeviceToken(context)
+                    ?.trim()
+                    ?.takeIf { it.isNotEmpty() }
                     ?: throw IOException(
                         "Device is not activated. Activate it first."
                     )
@@ -331,14 +323,7 @@ object ApiClient {
     }
 
     /**
-     * Shared HTTP request handler.
-     *
-     * bearerToken:
-     *     For existing APIs that use Authorization: Bearer.
-     *
-     * gatewayToken:
-     *     For device_poll.php and device_result.php, which use
-     *     X-Gateway-Token.
+     * Shared HTTPS request handler.
      */
     private fun request(
         endpoint: String,
@@ -369,8 +354,6 @@ object ApiClient {
             requestMethod = method
             connectTimeout = CONNECT_TIMEOUT
             readTimeout = READ_TIMEOUT
-
-            // Do not follow redirects with authentication headers.
             instanceFollowRedirects = false
 
             setRequestProperty("Accept", "application/json")
@@ -395,7 +378,6 @@ object ApiClient {
 
             if (body != null) {
                 doOutput = true
-
                 setRequestProperty(
                     "Content-Type",
                     "application/json; charset=utf-8"
@@ -422,14 +404,12 @@ object ApiClient {
 
             val responseBody = stream
                 ?.bufferedReader(Charsets.UTF_8)
-                ?.use { reader ->
-                    reader.readText()
-                } ?: ""
+                ?.use { reader -> reader.readText() }
+                ?: ""
 
             if (responseCode !in 200..299) {
                 val serverMessage = try {
                     val json = JSONObject(responseBody)
-
                     json.optString(
                         "message",
                         json.optString(
@@ -471,13 +451,6 @@ object ApiClient {
 
     /**
      * Build a safe endpoint from the configured HTTPS server URL.
-     *
-     * Example:
-     * Base URL:
-     * https://otp.ssmediaos.in
-     *
-     * Relative path:
-     * /api/v1/sms/device_poll.php
      */
     private fun buildEndpoint(
         serverUrl: String,
