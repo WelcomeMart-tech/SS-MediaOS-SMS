@@ -1,14 +1,15 @@
-package YOUR.PACKAGE.NAME
+package com.ssmediaos.smsgateway
 
+import android.app.Activity
 import android.os.Bundle
 import android.widget.Button
 import android.widget.EditText
 import android.widget.TextView
 import android.widget.Toast
-import androidx.appcompat.app.AppCompatActivity
-import org.json.JSONObject
+import java.net.HttpURLConnection
+import java.net.URL
 
-class GatewaySettingsActivity : AppCompatActivity() {
+class GatewaySettingsActivity : Activity() {
 
     private lateinit var serverUrlInput: EditText
     private lateinit var apiTokenInput: EditText
@@ -85,25 +86,30 @@ class GatewaySettingsActivity : AppCompatActivity() {
         }
 
         return try {
-            SecureConfig.saveActivationSettings(
-                this,
-                serverUrl,
-                deviceId,
-                activationToken
+            val saved = SecureConfig.saveActivationSettings(
+                context = this,
+                serverUrl = serverUrl,
+                deviceCode = deviceId,
+                activationToken = activationToken
             )
 
-            updateActivationStatus()
+            if (!saved) {
+                connectionStatusText.text =
+                    "Settings could not be saved. Check the server URL."
+                return false
+            }
+
             Toast.makeText(
                 this,
                 "Settings saved successfully",
                 Toast.LENGTH_SHORT
             ).show()
 
+            updateActivationStatus()
             true
         } catch (e: Exception) {
             connectionStatusText.text =
                 "Settings save failed: ${e.message ?: "Unknown error"}"
-
             false
         }
     }
@@ -114,17 +120,14 @@ class GatewaySettingsActivity : AppCompatActivity() {
         connectionStatusText.text = "Checking server connection…"
         testConnectionButton.isEnabled = false
 
+        val serverUrl = serverUrlInput.text.toString()
+            .trim()
+            .trimEnd('/')
+
         Thread {
-            var resultText: String
-
-            try {
-                val serverUrl = serverUrlInput.text.toString()
-                    .trim()
-                    .trimEnd('/')
-
-                val url = java.net.URL("$serverUrl/")
-                val connection =
-                    url.openConnection() as java.net.HttpURLConnection
+            val resultText = try {
+                val connection = URL("$serverUrl/")
+                    .openConnection() as HttpURLConnection
 
                 connection.requestMethod = "GET"
                 connection.connectTimeout = 15000
@@ -134,7 +137,7 @@ class GatewaySettingsActivity : AppCompatActivity() {
                 try {
                     val statusCode = connection.responseCode
 
-                    resultText = if (statusCode in 200..299) {
+                    if (statusCode in 200..299) {
                         "Server connection successful (HTTP $statusCode)"
                     } else {
                         "Server responded with HTTP $statusCode"
@@ -143,14 +146,12 @@ class GatewaySettingsActivity : AppCompatActivity() {
                     connection.disconnect()
                 }
             } catch (e: Exception) {
-                resultText =
-                    "Connection failed: ${e.message ?: "Network error"}"
+                "Connection failed: ${e.message ?: "Network error"}"
             }
 
             runOnUiThread {
                 connectionStatusText.text = resultText
                 testConnectionButton.isEnabled = true
-                updateActivationStatus()
             }
         }.start()
     }
@@ -158,11 +159,10 @@ class GatewaySettingsActivity : AppCompatActivity() {
     private fun updateActivationStatus() {
         val deviceToken = SecureConfig.getDeviceToken(this)
 
-        if (deviceToken.isNullOrBlank()) {
-            connectionStatusText.text =
-                "NOT ACTIVATED — Save settings and activate the device."
+        connectionStatusText.text = if (deviceToken.isNullOrBlank()) {
+            "NOT ACTIVATED — Device activation is required."
         } else {
-            connectionStatusText.text = "ACTIVATED"
+            "ACTIVATED"
         }
     }
 }
