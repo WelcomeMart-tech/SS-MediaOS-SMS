@@ -469,6 +469,18 @@ class GatewayService : Service() {
         updateStatus("Processing SMS job")
         Log.i(TAG, "Processing SMS job ID: $jobId")
 
+        // Register the job BEFORE asking Android to send the SMS.
+        // A sent PendingIntent callback can arrive very quickly; registering
+        // after sendSms() creates a race where that callback is lost.
+        val jobState = SmsJobState(requestId = requestId)
+        val existingState = smsJobs.putIfAbsent(jobId, jobState)
+        if (existingState != null) {
+            Log.e(TAG, "Duplicate in-flight SMS job ignored: $jobId")
+            requestInProgress = false
+            updateStatus("Duplicate SMS job ignored — check server")
+            return
+        }
+
         when (
             val sendResult = SmsHelper.sendSms(
                 context = this,
@@ -479,15 +491,12 @@ class GatewayService : Service() {
             )
         ) {
             is SmsHelper.SendResult.Success -> {
-
-                smsJobs[jobId] = SmsJobState(
-                    requestId = requestId
-                )
-
                 updateStatus("SMS submitted — awaiting Android callback")
             }
 
             is SmsHelper.SendResult.Failure -> {
+                // No Android callback is expected after submission failure.
+                smsJobs.remove(jobId, jobState)
                 Log.e(
                     TAG,
                     "SMS submission failed: ${sendResult.reason}"
@@ -636,7 +645,8 @@ class GatewayService : Service() {
         handler.removeCallbacks(pollRunnable)
 
         saveServiceRunning(false)
-        setServerState(STATE_CONNECTING)
+        setServerState(STATE_STOPPED)
+        smsJobs.clear()
 
         try {
             stopForeground(STOP_FOREGROUND_REMOVE)
@@ -713,7 +723,8 @@ class GatewayService : Service() {
         handler.removeCallbacks(pollRunnable)
 
         saveServiceRunning(false)
-        setServerState(STATE_CONNECTING)
+        setServerState(STATE_STOPPED)
+        smsJobs.clear()
 
         if (receiverRegistered) {
             try {
@@ -750,6 +761,7 @@ class GatewayService : Service() {
         private const val STATE_CONNECTED = "CONNECTED"
         private const val STATE_FAILED = "FAILED"
         private const val STATE_CONNECTING = "CONNECTING"
+        private const val STATE_STOPPED = "STOPPED"
 
         const val ACTION_START =
             "com.ssmediaos.smsgateway.action.START"
