@@ -158,6 +158,23 @@
                 android:textSize="14sp"
                 android:textStyle="bold" />
 
+            <!-- Assigned SIM selector; GatewaySettingsActivity must populate and handle this Spinner. -->
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="20dp"
+                android:text="Assigned SIM"
+                android:textColor="#1E293B"
+                android:textSize="15sp"
+                android:textStyle="bold" />
+
+            <Spinner
+                android:id="@+id/simSelectionSpinner"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:contentDescription="Select the assigned SIM for this gateway" />
+
             <!-- SIM status -->
             <TextView
                 android:id="@+id/simStatusText"
