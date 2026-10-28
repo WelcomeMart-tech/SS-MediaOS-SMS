@@ -1,16 +1,21 @@
-
 package com.ssmediaos.smsgateway
 
 import android.content.Context
-import org.json.JSONArray
 import org.json.JSONObject
 
+/**
+ * Incoming SMS storage is intentionally disabled.
+ *
+ * This keeps the existing method signatures so other original files that still
+ * reference IncomingSmsStore continue to compile, while this app does not save
+ * or expose incoming SMS messages.
+ */
 object IncomingSmsStore {
 
     private const val PREFS_NAME = "incoming_sms_store"
     private const val KEY_MESSAGES = "messages"
-    private const val MAX_MESSAGES = 200
 
+    /** No-op: incoming SMS messages are not stored by this gateway. */
     @Synchronized
     fun save(
         context: Context,
@@ -18,70 +23,18 @@ object IncomingSmsStore {
         message: String,
         timestamp: Long
     ) {
-        val preferences = context.getSharedPreferences(
-            PREFS_NAME,
-            Context.MODE_PRIVATE
-        )
-
-        val oldMessages = try {
-            JSONArray(preferences.getString(KEY_MESSAGES, "[]") ?: "[]")
-        } catch (_: Exception) {
-            JSONArray()
-        }
-
-        val updatedMessages = JSONArray()
-
-        updatedMessages.put(
-            JSONObject().apply {
-                put("sender", sender)
-                put("message", message)
-                put("timestamp", timestamp)
-            }
-        )
-
-        for (index in 0 until oldMessages.length()) {
-            if (updatedMessages.length() >= MAX_MESSAGES) {
-                break
-            }
-
-            val item = oldMessages.optJSONObject(index) ?: continue
-            updatedMessages.put(item)
-        }
-
-        preferences.edit()
-            .putString(KEY_MESSAGES, updatedMessages.toString())
-            .apply()
+        // Intentionally disabled. This app is for sending SMS only.
     }
 
+    /** Always returns an empty list because incoming SMS storage is disabled. */
     @Synchronized
-    fun getAll(context: Context): List<JSONObject> {
-        val preferences = context.getSharedPreferences(
-            PREFS_NAME,
-            Context.MODE_PRIVATE
-        )
+    fun getAll(context: Context): List<JSONObject> = emptyList()
 
-        val messages = try {
-            JSONArray(preferences.getString(KEY_MESSAGES, "[]") ?: "[]")
-        } catch (_: Exception) {
-            JSONArray()
-        }
-
-        return buildList {
-            for (index in 0 until messages.length()) {
-                val item = messages.optJSONObject(index)
-                if (item != null) {
-                    add(item)
-                }
-            }
-        }
-    }
-
+    /** Removes any messages saved by an older version of the app. */
     @Synchronized
     fun clear(context: Context) {
-        context.getSharedPreferences(
-            PREFS_NAME,
-            Context.MODE_PRIVATE
-        ).edit()
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
             .remove(KEY_MESSAGES)
             .apply()
     }
