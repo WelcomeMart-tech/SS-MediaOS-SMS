@@ -282,6 +282,26 @@ class GatewayService : Service() {
             return
         }
 
+        if (!SecureConfig.isOrganizationVerified(this)) {
+            Log.w(TAG, "Gateway start blocked: organization/mobile is not verified")
+
+            saveServiceRunning(false)
+            setServerState(STATE_FAILED)
+            updateStatus("Organization and registered mobile must be verified first")
+            stopSelf(startId)
+            return
+        }
+
+        if (SecureConfig.getSelectedSimSubscriptionId(this) == null) {
+            Log.w(TAG, "Gateway start blocked: no SIM has been selected")
+
+            saveServiceRunning(false)
+            setServerState(STATE_FAILED)
+            updateStatus("Select an assigned SIM before starting the gateway")
+            stopSelf(startId)
+            return
+        }
+
         if (deviceToken.isNullOrBlank()) {
             Log.w(TAG, "Gateway start blocked: device is not activated")
 
@@ -433,6 +453,23 @@ class GatewayService : Service() {
      * Validate a claimed server job and submit it to Android.
      */
     private fun processJob(job: JSONObject) {
+
+        // Re-check immediately before each SMS job, not only when the service starts.
+        // This prevents queued jobs from sending after verification/SIM settings change.
+        if (!SecureConfig.isOrganizationVerified(this)) {
+            Log.w(TAG, "SMS job blocked: organization/mobile is not verified")
+            requestInProgress = false
+            updateStatus("SMS blocked: verify organization and registered mobile")
+            return
+        }
+
+        val selectedSubscriptionId = SecureConfig.getSelectedSimSubscriptionId(this)
+        if (selectedSubscriptionId == null) {
+            Log.w(TAG, "SMS job blocked: no SIM is selected")
+            requestInProgress = false
+            updateStatus("SMS blocked: select an assigned SIM")
+            return
+        }
 
         val jobId = job.optLong("id", 0L)
         val requestId = job.optString("request_id").trim()
