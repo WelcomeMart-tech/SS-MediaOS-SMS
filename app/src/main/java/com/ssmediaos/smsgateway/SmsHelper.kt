@@ -8,6 +8,7 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.telephony.SmsManager
+import android.telephony.SubscriptionManager
 import android.util.Log
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -68,9 +69,40 @@ object SmsHelper {
         }
 
         return try {
-            val smsManager = getSmsManager(appContext)
+            // SMS must use the explicitly assigned SIM. Do not silently fall
+            // back to the device default or another SIM.
+            val selectedSubscriptionId =
+                SecureConfig.getSelectedSimSubscriptionId(appContext)
+                    ?: return SendResult.Failure(
+                        "No SIM is selected. Open Gateway Settings and select the assigned SIM."
+                    )
+
+            val subscriptionManager = appContext.getSystemService(
+                SubscriptionManager::class.java
+            ) ?: return SendResult.Failure(
+                "SIM subscription service is not available."
+            )
+
+            val activeSubscriptions = try {
+                subscriptionManager.activeSubscriptionInfoList.orEmpty()
+            } catch (e: SecurityException) {
+                return SendResult.Failure(
+                    "Cannot check SIM availability. Grant the required phone-state permission and select the assigned SIM."
+                )
+            }
+
+            val selectedSubscriptionIsActive = activeSubscriptions.any {
+                it.subscriptionId == selectedSubscriptionId
+            }
+            if (!selectedSubscriptionIsActive) {
+                return SendResult.Failure(
+                    "The assigned SIM is unavailable. SMS was not sent; select the assigned SIM again."
+                )
+            }
+
+            val smsManager = getSmsManager(appContext, selectedSubscriptionId)
                 ?: return SendResult.Failure(
-                    "SMS service is not available on this device."
+                    "SMS service for the assigned SIM is not available."
                 )
 
             val parts = smsManager.divideMessage(smsText)
@@ -139,16 +171,17 @@ object SmsHelper {
         }
     }
 
-    private fun getSmsManager(context: Context): SmsManager? {
+    private fun getSmsManager(
+        context: Context,
+        subscriptionId: Int
+    ): SmsManager? {
         return try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                context.getSystemService(SmsManager::class.java)
-            } else {
-                @Suppress("DEPRECATION")
-                SmsManager.getDefault()
-            }
+            // createForSubscriptionId is available on the app's minSdk (26).
+            val baseManager = context.getSystemService(SmsManager::class.java)
+                ?: return null
+            baseManager.createForSubscriptionId(subscriptionId)
         } catch (e: Exception) {
-            Log.e(TAG, "Unable to obtain SmsManager", e)
+            Log.e(TAG, "Unable to obtain SmsManager for assigned SIM", e)
             null
         }
     }
