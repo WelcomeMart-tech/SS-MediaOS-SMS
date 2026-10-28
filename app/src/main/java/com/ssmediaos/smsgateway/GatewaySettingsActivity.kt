@@ -458,6 +458,23 @@ class GatewaySettingsActivity : Activity() {
             return
         }
 
+        // Capture the exact identity being verified. A response for old details
+        // must never verify details the user changed while the request was running.
+        val requestedApiKey = companyApiKey
+        val requestedOrganizationCode = organizationCode
+        val requestedRegisteredMobile = registeredMobile
+
+        // Fail closed while checking: discard any old verification/device token.
+        getSharedPreferences(statusPrefsName, MODE_PRIVATE).edit()
+            .putBoolean("organization_verified", false)
+            .putString("organization_status", "CHECKING")
+            .remove("organization_name")
+            .apply()
+        SecureConfig.clearDeviceToken(this)
+        organizationNameText.text = "Organization Name: Not verified"
+        organizationStatusText.text = "Organization Verification: CHECKING"
+        activationStatusText.text = "Device status: NOT ACTIVATED"
+
         verifyMobileButton.isEnabled = false
         organizationStatusText.text = "Organization Verification: CHECKING"
         organizationNameText.text = "Organization Name: Checking..."
@@ -529,6 +546,32 @@ class GatewaySettingsActivity : Activity() {
 
             runOnUiThread {
                 verifyMobileButton.isEnabled = true
+
+                // Ignore stale server responses if any identity field changed in flight.
+                val currentApiKey = apiTokenInput.text.toString().trim()
+                val currentOrganizationCode = organizationCodeInput.text.toString().trim()
+                val currentRegisteredMobile = registeredMobileInput.text.toString().trim()
+                val identityStillMatches =
+                    currentApiKey == requestedApiKey &&
+                    currentOrganizationCode == requestedOrganizationCode &&
+                    currentRegisteredMobile == requestedRegisteredMobile
+
+                if (!identityStillMatches) {
+                    val prefs = getSharedPreferences(statusPrefsName, MODE_PRIVATE)
+                    prefs.edit()
+                        .putBoolean("organization_verified", false)
+                        .putString("organization_status", "PENDING")
+                        .remove("organization_name")
+                        .apply()
+                    SecureConfig.clearDeviceToken(this)
+                    organizationNameText.text = "Organization Name: Not verified"
+                    organizationStatusText.text = "Organization Verification: PENDING"
+                    connectionStatusText.text =
+                        "Details changed during verification. Verify again with the current details."
+                    updateActivationStatus()
+                    return@runOnUiThread
+                }
+
                 val prefs = getSharedPreferences(statusPrefsName, MODE_PRIVATE)
                 prefs.edit()
                     .putBoolean("organization_verified", verified)
