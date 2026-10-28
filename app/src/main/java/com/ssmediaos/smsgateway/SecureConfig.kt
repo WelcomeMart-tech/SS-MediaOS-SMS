@@ -22,6 +22,11 @@ object SecureConfig {
     private const val KEY_DEVICE_ID = "device_id"
     private const val KEY_API_TOKEN = "api_token"
     private const val KEY_DEVICE_TOKEN = "device_token"
+    private const val KEY_ORGANIZATION_CODE = "organization_code"
+    private const val KEY_REGISTERED_MOBILE = "registered_mobile"
+    private const val KEY_ORGANIZATION_NAME = "organization_name"
+    private const val KEY_ORGANIZATION_VERIFIED = "organization_verified"
+    private const val KEY_SELECTED_SIM_SUBSCRIPTION_ID = "selected_sim_subscription_id"
     private const val LEGACY_DEVICE_CODE = "Device-01"
 
     // Android Keystore protects the encryption key; secrets are encrypted before
@@ -97,6 +102,80 @@ object SecureConfig {
         apiToken = activationToken,
         deviceId = deviceCode
     )
+
+    /**
+     * Organization identity is stored separately from the API credential.
+     * Verification must only be marked true after a successful server response.
+     */
+    fun saveOrganizationIdentity(
+        context: Context,
+        organizationCode: String,
+        registeredMobile: String
+    ): Boolean {
+        val code = organizationCode.trim()
+        val mobile = registeredMobile.filter { it.isDigit() }
+        if (code.isBlank() || mobile.length !in 8..15) return false
+
+        val prefs = preferences(context)
+        val identityChanged =
+            prefs.getString(KEY_ORGANIZATION_CODE, "").orEmpty() != code ||
+            prefs.getString(KEY_REGISTERED_MOBILE, "").orEmpty() != mobile
+
+        val editor = prefs.edit()
+            .putString(KEY_ORGANIZATION_CODE, code)
+            .putString(KEY_REGISTERED_MOBILE, mobile)
+
+        if (identityChanged) {
+            editor.putBoolean(KEY_ORGANIZATION_VERIFIED, false)
+                .remove(KEY_ORGANIZATION_NAME)
+                .remove(KEY_DEVICE_TOKEN)
+        }
+        return editor.commit()
+    }
+
+    fun getOrganizationCode(context: Context): String =
+        preferences(context).getString(KEY_ORGANIZATION_CODE, "").orEmpty()
+
+    fun getRegisteredMobile(context: Context): String =
+        preferences(context).getString(KEY_REGISTERED_MOBILE, "").orEmpty()
+
+    fun isOrganizationVerified(context: Context): Boolean =
+        preferences(context).getBoolean(KEY_ORGANIZATION_VERIFIED, false)
+
+    fun getOrganizationName(context: Context): String =
+        preferences(context).getString(KEY_ORGANIZATION_NAME, "").orEmpty()
+
+    fun saveOrganizationVerification(
+        context: Context,
+        verified: Boolean,
+        organizationName: String = ""
+    ): Boolean {
+        val editor = preferences(context).edit()
+            .putBoolean(KEY_ORGANIZATION_VERIFIED, verified)
+
+        if (verified && organizationName.isNotBlank()) {
+            editor.putString(KEY_ORGANIZATION_NAME, organizationName.trim())
+        } else {
+            editor.remove(KEY_ORGANIZATION_NAME)
+            editor.remove(KEY_DEVICE_TOKEN)
+        }
+        return editor.commit()
+    }
+
+    fun getSelectedSimSubscriptionId(context: Context): Int? {
+        val value = preferences(context).getInt(KEY_SELECTED_SIM_SUBSCRIPTION_ID, -1)
+        return value.takeIf { it >= 0 }
+    }
+
+    fun saveSelectedSimSubscriptionId(context: Context, subscriptionId: Int): Boolean {
+        if (subscriptionId < 0) return false
+        return preferences(context).edit()
+            .putInt(KEY_SELECTED_SIM_SUBSCRIPTION_ID, subscriptionId)
+            .commit()
+    }
+
+    fun clearSelectedSimSubscriptionId(context: Context): Boolean =
+        preferences(context).edit().remove(KEY_SELECTED_SIM_SUBSCRIPTION_ID).commit()
 
     fun saveDeviceToken(context: Context, deviceToken: String): Boolean {
         val value = deviceToken.trim()
