@@ -15,16 +15,50 @@ class SmsSentReceiver : BroadcastReceiver() {
             return
         }
 
-        val requestCode = intent.getIntExtra(EXTRA_REQUEST_CODE, -1)
+        val requestCode = intent.getIntExtra(
+            EXTRA_REQUEST_CODE,
+            -1
+        )
 
-        // These values must be attached by SmsHelper.kt.
-        val jobId = intent.getLongExtra(EXTRA_JOB_ID, -1L)
-        val requestId = intent.getStringExtra(EXTRA_GATEWAY_REQUEST_ID).orEmpty()
-        val partIndex = intent.getIntExtra(EXTRA_PART_INDEX, -1)
-        val totalParts = intent.getIntExtra(EXTRA_TOTAL_PARTS, 1)
+        val jobId = intent.getLongExtra(
+            EXTRA_JOB_ID,
+            -1L
+        )
+
+        val requestId = intent.getStringExtra(
+            EXTRA_GATEWAY_REQUEST_ID
+        ).orEmpty()
+
+        val partIndex = intent.getIntExtra(
+            EXTRA_PART_INDEX,
+            -1
+        )
+
+        val totalParts = intent.getIntExtra(
+            EXTRA_TOTAL_PARTS,
+            1
+        )
+
+        // Reject callbacks without valid job and part information.
+        if (
+            requestCode < 0 ||
+            jobId <= 0L ||
+            !requestId.matches(Regex("^[a-f0-9]{32}$")) ||
+            totalParts < 1 ||
+            partIndex !in 0 until totalParts
+        ) {
+            Log.e(
+                TAG,
+                "Invalid SMS callback metadata; callback ignored. " +
+                    "jobId=$jobId, requestCode=$requestCode, " +
+                    "partIndex=$partIndex, totalParts=$totalParts"
+            )
+            return
+        }
 
         val result = when (resultCode) {
-            Activity.RESULT_OK -> STATUS_SMS_SENT
+            Activity.RESULT_OK ->
+                STATUS_SMS_SENT
 
             SmsManager.RESULT_ERROR_GENERIC_FAILURE ->
                 STATUS_GENERIC_FAILURE
@@ -38,22 +72,31 @@ class SmsSentReceiver : BroadcastReceiver() {
             SmsManager.RESULT_ERROR_RADIO_OFF ->
                 STATUS_RADIO_OFF
 
-            else -> "UNKNOWN_ERROR_$resultCode"
+            else ->
+                "UNKNOWN_ERROR_$resultCode"
         }
 
         val success = resultCode == Activity.RESULT_OK
 
         Log.i(
             TAG,
-            "SMS callback: result=$result, jobId=$jobId, " +
-                "requestId=$requestId, part=$partIndex/$totalParts, " +
-                "requestCode=$requestCode"
+            "SMS part callback: result=$result, " +
+                "jobId=$jobId, requestId=$requestId, " +
+                "part=${partIndex + 1}/$totalParts"
         )
 
-        // Do not report a server result here for every individual part.
-        // GatewayService must aggregate all callbacks for the same job.
-        val resultIntent = Intent(ACTION_SMS_PART_RESULT).apply {
+        /*
+         * This callback reports Android's SMS submission result.
+         * It does NOT prove that the recipient received the message.
+         *
+         * GatewayService aggregates the results of all parts for a job.
+         * Do not submit an API result for each individual part here.
+         */
+        val resultIntent = Intent(
+            ACTION_SMS_PART_RESULT
+        ).apply {
             setPackage(context.packageName)
+
             putExtra(EXTRA_RESULT, result)
             putExtra(EXTRA_SUCCESS, success)
             putExtra(EXTRA_REQUEST_CODE, requestCode)
@@ -63,17 +106,25 @@ class SmsSentReceiver : BroadcastReceiver() {
             putExtra(EXTRA_TOTAL_PARTS, totalParts)
         }
 
-        context.sendBroadcast(resultIntent)
+        try {
+            context.sendBroadcast(resultIntent)
+        } catch (e: Exception) {
+            Log.e(
+                TAG,
+                "Unable to forward SMS callback to GatewayService",
+                e
+            )
+        }
     }
 
     companion object {
         private const val TAG = "SmsSentReceiver"
 
-        // Action used by the PendingIntent created in SmsHelper.
+        // PendingIntent action used by SmsHelper.kt.
         const val ACTION_SMS_RESULT =
             "com.ssmediaos.smsgateway.ACTION_SMS_RESULT"
 
-        // Separate action for the callback broadcast consumed by the service.
+        // Internal callback action consumed by GatewayService.kt.
         const val ACTION_SMS_PART_RESULT =
             "com.ssmediaos.smsgateway.ACTION_SMS_PART_RESULT"
 
