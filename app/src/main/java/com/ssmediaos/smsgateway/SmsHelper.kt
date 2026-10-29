@@ -15,7 +15,6 @@ import java.util.concurrent.atomic.AtomicInteger
 object SmsHelper {
 
     private const val TAG = "SmsHelper"
-
     private val requestCodeCounter = AtomicInteger(2000)
 
     sealed class SendResult {
@@ -24,10 +23,8 @@ object SmsHelper {
     }
 
     /**
-     * Success means Android accepted the send request.
-     * It does not mean that the recipient received the SMS.
-     *
-     * jobId and requestId connect Android callbacks to the server job.
+     * Success means Android accepted the SMS submission request.
+     * It does not confirm delivery to the recipient.
      */
     fun sendSms(
         context: Context,
@@ -69,43 +66,57 @@ object SmsHelper {
         }
 
         return try {
-            // SMS must use the explicitly assigned SIM. Do not silently fall
-            // back to the device default or another SIM.
+            // Only use the explicitly assigned SIM.
+            // Never silently switch to another SIM.
             val selectedSubscriptionId =
                 SecureConfig.getSelectedSimSubscriptionId(appContext)
                     ?: return SendResult.Failure(
                         "No SIM is selected. Open Gateway Settings and select the assigned SIM."
                     )
 
-            val subscriptionManager = appContext.getSystemService(
-                SubscriptionManager::class.java
-            ) ?: return SendResult.Failure(
-                "SIM subscription service is not available."
-            )
+            val subscriptionManager =
+                appContext.getSystemService(
+                    SubscriptionManager::class.java
+                ) ?: return SendResult.Failure(
+                    "SIM subscription service is not available."
+                )
 
             val activeSubscriptions = try {
                 subscriptionManager.activeSubscriptionInfoList.orEmpty()
             } catch (e: SecurityException) {
+                Log.e(TAG, "Unable to check active SIM subscriptions", e)
+
                 return SendResult.Failure(
-                    "Cannot check SIM availability. Grant the required phone-state permission and select the assigned SIM."
+                    "Cannot check SIM availability. Check the app's phone permissions and select the assigned SIM again."
                 )
             }
 
-            val selectedSubscriptionIsActive = activeSubscriptions.any {
-                it.subscriptionId == selectedSubscriptionId
-            }
+            val selectedSubscriptionIsActive =
+                activeSubscriptions.any {
+                    it.subscriptionId == selectedSubscriptionId
+                }
+
             if (!selectedSubscriptionIsActive) {
                 return SendResult.Failure(
-                    "The assigned SIM is unavailable. SMS was not sent; select the assigned SIM again."
+                    "The assigned SIM is unavailable. SMS was not submitted. Select the assigned SIM again."
                 )
             }
 
-            val smsManager = getSmsManager(appContext, selectedSubscriptionId)
-                ?: return SendResult.Failure(
-                    "SMS service for the assigned SIM is not available."
-                )
+            val smsManager =
+                getSmsManager(appContext, selectedSubscriptionId)
+                    ?: return SendResult.Failure(
+                        "SMS service for the assigned SIM is not available."
+                    )
 
-            val parts = smsManager.divideMessage(smsText)
+            val parts = try {
+                smsManager.divideMessage(smsText)
+            } catch (e: Exception) {
+                Log.e(TAG, "Unable to divide SMS message", e)
+
+                return SendResult.Failure(
+                    e.message ?: "Message could not be divided into SMS parts."
+                )
+            }
 
             if (parts.isEmpty()) {
                 return SendResult.Failure(
@@ -148,23 +159,26 @@ object SmsHelper {
             Log.i(
                 TAG,
                 "SMS submission requested; jobId=$jobId, " +
-                    "parts=${parts.size}"
+                    "parts=${parts.size}, subscriptionId=$selectedSubscriptionId"
             )
 
             SendResult.Success
 
         } catch (e: SecurityException) {
             Log.e(TAG, "SMS permission/security error", e)
+
             SendResult.Failure(
                 e.message ?: "SMS permission or security error."
             )
         } catch (e: IllegalArgumentException) {
             Log.e(TAG, "Invalid SMS arguments", e)
+
             SendResult.Failure(
                 e.message ?: "Invalid phone number or SMS arguments."
             )
         } catch (e: Exception) {
             Log.e(TAG, "SMS submission failed", e)
+
             SendResult.Failure(
                 e.message ?: "Unable to submit SMS."
             )
@@ -176,12 +190,17 @@ object SmsHelper {
         subscriptionId: Int
     ): SmsManager? {
         return try {
-            // createForSubscriptionId is available on the app's minSdk (26).
-            val baseManager = context.getSystemService(SmsManager::class.java)
-                ?: return null
+            val baseManager =
+                context.getSystemService(SmsManager::class.java)
+                    ?: return null
+
             baseManager.createForSubscriptionId(subscriptionId)
         } catch (e: Exception) {
-            Log.e(TAG, "Unable to obtain SmsManager for assigned SIM", e)
+            Log.e(
+                TAG,
+                "Unable to obtain SmsManager for assigned SIM",
+                e
+            )
             null
         }
     }
@@ -223,6 +242,7 @@ object SmsHelper {
                 totalParts
             )
 
+            // Give every SMS part a unique PendingIntent identity.
             data = Uri.parse(
                 "ssmediaos://sms-sent/$requestCode"
             )
