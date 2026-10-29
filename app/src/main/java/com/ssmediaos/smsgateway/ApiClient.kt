@@ -1,5 +1,6 @@
 package com.ssmediaos.smsgateway
 
+import android.content.Context
 import org.json.JSONObject
 import java.io.IOException
 import java.net.HttpURLConnection
@@ -17,6 +18,9 @@ object ApiClient {
     private const val DEFAULT_SERVER_URL =
         "https://otp.ssmediaos.in"
 
+    private const val ORGANIZATION_VERIFY_PATH =
+        "/api/v1/sms/organization_verify.php"
+
     private const val DEVICE_ACTIVATE_PATH =
         "/api/v1/sms/device_activate.php"
 
@@ -26,50 +30,210 @@ object ApiClient {
     private const val DEVICE_RESULT_PATH =
         "/api/v1/sms/device_result.php"
 
+
     /**
-     * Activate a registered Android gateway device.
+     * Verify Organization Code with the server.
      *
-     * IMPORTANT:
-     * - Device ID is read dynamically from SecureConfig.
-     * - Company API token is read from SecureConfig.
-     * - Activation secret must match the server configuration.
+     * The organization code is checked by the PHP API.
+     * Local storage alone is NOT treated as verification.
      *
-     * Expected server response:
+     * Expected successful server response:
+     *
      * {
      *   "ok": true,
-     *   "deviceToken": "server-issued-token"
+     *   "verified": true,
+     *   "organizationName": "Registered Organization"
      * }
+     *
+     * The PHP endpoint must validate the code against the
+     * actual organization database and reject inactive records.
+     */
+    fun verifyOrganization(
+        organizationCode: String,
+        registeredMobile: String,
+        callback: (Result<JSONObject>) -> Unit
+    ) {
+        executor.execute {
+
+            val result = runCatching {
+
+                val context = AppContextHolder.context
+
+                val code = organizationCode.trim()
+                val mobile = registeredMobile.trim()
+
+                if (code.isBlank()) {
+                    throw IOException(
+                        "Please enter your Organization Code."
+                    )
+                }
+
+                if (mobile.isBlank()) {
+                    throw IOException(
+                        "Please enter your registered mobile number."
+                    )
+                }
+
+                if (!mobile.matches(Regex("^[0-9]{10,15}$"))) {
+                    throw IOException(
+                        "Please enter a valid registered mobile number."
+                    )
+                }
+
+                val deviceCode = SecureConfig
+                    .getDeviceCode(context)
+                    ?.trim()
+                    ?.takeIf { it.isNotEmpty() }
+                    ?: throw IOException(
+                        "Device ID is unavailable. Please restart the app."
+                    )
+
+                val body = JSONObject()
+                    .put("organizationCode", code)
+                    .put("registeredMobile", mobile)
+                    .put("deviceCode", deviceCode)
+
+                val response = request(
+                    endpoint = buildEndpoint(
+                        getServerUrl(context),
+                        ORGANIZATION_VERIFY_PATH
+                    ),
+                    method = "POST",
+                    body = body
+                )
+
+                val verified = response.optBoolean(
+                    "verified",
+                    false
+                )
+
+                if (!response.optBoolean("ok", false) || !verified) {
+
+                    val errorCode = response
+                        .optString("errorCode", "")
+                        .uppercase()
+
+                    val message = when (errorCode) {
+                        "ORG_NOT_FOUND" ->
+                            "Organization Code was not found."
+
+                        "ORG_INACTIVE" ->
+                            "This organization is inactive. Please contact support."
+
+                        "MOBILE_MISMATCH" ->
+                            "Mobile number does not match the registered organization."
+
+                        "ORG_UNAUTHORIZED" ->
+                            "This organization is not authorized to use the SMS gateway."
+
+                        "DEVICE_DISABLED" ->
+                            "This gateway device has been disabled."
+
+                        else ->
+                            "Organization verification failed. Please check your details."
+                    }
+
+                    throw IOException(message)
+                }
+
+                val organizationName = response
+                    .optString("organizationName", "")
+                    .trim()
+
+                if (organizationName.isBlank()) {
+                    throw IOException(
+                        "The server did not return the registered organization name."
+                    )
+                }
+
+                /*
+                 * Save organization identity only after the server
+                 * confirms verification.
+                 */
+                val identitySaved = SecureConfig
+                    .saveOrganizationIdentity(
+                        context,
+                        code,
+                        mobile
+                    )
+
+                if (!identitySaved) {
+                    throw IOException(
+                        "Organization was verified, but its details could not be saved."
+                    )
+                }
+
+                val verificationSaved = SecureConfig
+                    .saveOrganizationVerification(
+                        context,
+                        true,
+                        organizationName
+                    )
+
+                if (!verificationSaved) {
+                    SecureConfig.saveOrganizationVerification(
+                        context,
+                        false,
+                        ""
+                    )
+
+                    throw IOException(
+                        "Could not save the organization verification status."
+                    )
+                }
+
+                response
+            }
+
+            callbackSafely(callback, result)
+        }
+    }
+
+
+    /**
+     * Activate the registered Android SMS gateway device.
+     *
+     * NOTE:
+     * The PHP activation endpoint must accept the same request
+     * fields used here. Activation must be rejected unless the
+     * organization is verified and authorized on the server.
      */
     fun activate(
         callback: (Result<JSONObject>) -> Unit
     ) {
         executor.execute {
+
             val result = runCatching {
+
                 val context = AppContextHolder.context
 
-                val serverUrl = SecureConfig.getServerUrl(context)
-                    ?.trim()
-                    ?.takeIf { it.isNotEmpty() }
-                    ?: DEFAULT_SERVER_URL
+                if (!SecureConfig.isOrganizationVerified(context)) {
+                    throw IOException(
+                        "Please verify your Organization Code before activation."
+                    )
+                }
 
-                val deviceCode = SecureConfig.getDeviceCode(context)
+                val serverUrl = getServerUrl(context)
+
+                val deviceCode = SecureConfig
+                    .getDeviceCode(context)
                     ?.trim()
                     ?.takeIf { it.isNotEmpty() }
                     ?: throw IOException(
                         "Device ID is unavailable. Please check device configuration."
                     )
 
-                val companyApiKey =
-                    SecureConfig.getCompanyApiKey(context)
-                        ?.trim()
-                        ?.takeIf { it.isNotEmpty() }
-                        ?: throw IOException(
-                            "Please enter your Company API Token in settings."
-                        )
+                val activationToken = SecureConfig
+                    .getCompanyApiKey(context)
+                    ?.trim()
+                    ?.takeIf { it.isNotEmpty() }
+                    ?: throw IOException(
+                        "Please enter the authorized activation token in settings."
+                    )
 
                 val body = JSONObject()
                     .put("deviceCode", deviceCode)
-                    .put("companyApiKey", companyApiKey)
+                    .put("activationToken", activationToken)
 
                 val response = request(
                     endpoint = buildEndpoint(
@@ -81,13 +245,13 @@ object ApiClient {
                 )
 
                 if (!response.optBoolean("ok", false)) {
-                    // Do not display arbitrary server diagnostics in the app UI.
                     throw IOException(
-                        "Device activation was rejected. Check the Company API Key and server configuration."
+                        "Device activation was rejected. Please check the activation details."
                     )
                 }
 
-                val deviceToken = response.optString("deviceToken")
+                val deviceToken = response
+                    .optString("deviceToken", "")
                     .trim()
 
                 if (deviceToken.isBlank()) {
@@ -109,6 +273,7 @@ object ApiClient {
         }
     }
 
+
     /**
      * Poll the server for one queued SMS job.
      */
@@ -116,15 +281,22 @@ object ApiClient {
         callback: (Result<JSONObject>) -> Unit
     ) {
         executor.execute {
+
             val result = runCatching {
+
                 val context = AppContextHolder.context
 
-                val serverUrl = getServerUrl(context)
+                if (!SecureConfig.isOrganizationVerified(context)) {
+                    throw IOException(
+                        "Organization verification is required before sending SMS."
+                    )
+                }
+
                 val deviceToken = getDeviceToken(context)
 
                 val response = request(
                     endpoint = buildEndpoint(
-                        serverUrl,
+                        getServerUrl(context),
                         DEVICE_POLL_PATH
                     ),
                     method = "POST",
@@ -132,7 +304,10 @@ object ApiClient {
                     body = JSONObject()
                 )
 
-                ensureSuccess(response, "Gateway polling failed.")
+                ensureSuccess(
+                    response,
+                    "Gateway polling failed."
+                )
 
                 response
             }
@@ -140,6 +315,7 @@ object ApiClient {
             callbackSafely(callback, result)
         }
     }
+
 
     /**
      * Submit the result of an SMS job.
@@ -153,7 +329,9 @@ object ApiClient {
         callback: (Result<JSONObject>) -> Unit
     ) {
         executor.execute {
+
             val result = runCatching {
+
                 if (jobId <= 0L) {
                     throw IOException("Invalid SMS job ID.")
                 }
@@ -163,7 +341,6 @@ object ApiClient {
                 }
 
                 val context = AppContextHolder.context
-                val serverUrl = getServerUrl(context)
                 val deviceToken = getDeviceToken(context)
 
                 val body = JSONObject()
@@ -175,7 +352,7 @@ object ApiClient {
 
                 val response = request(
                     endpoint = buildEndpoint(
-                        serverUrl,
+                        getServerUrl(context),
                         DEVICE_RESULT_PATH
                     ),
                     method = "POST",
@@ -195,6 +372,7 @@ object ApiClient {
         }
     }
 
+
     /**
      * Existing unauthenticated GET method retained for compatibility.
      */
@@ -203,12 +381,16 @@ object ApiClient {
         callback: (Result<JSONObject>) -> Unit
     ) {
         executor.execute {
+
             val result = runCatching {
+
                 val context = AppContextHolder.context
-                val serverUrl = getServerUrl(context)
 
                 request(
-                    endpoint = buildEndpoint(serverUrl, endpoint),
+                    endpoint = buildEndpoint(
+                        getServerUrl(context),
+                        endpoint
+                    ),
                     method = "GET"
                 )
             }
@@ -216,6 +398,7 @@ object ApiClient {
             callbackSafely(callback, result)
         }
     }
+
 
     /**
      * Existing GET method using device-token authentication.
@@ -225,13 +408,17 @@ object ApiClient {
         callback: (Result<JSONObject>) -> Unit
     ) {
         executor.execute {
+
             val result = runCatching {
+
                 val context = AppContextHolder.context
-                val serverUrl = getServerUrl(context)
                 val deviceToken = getDeviceToken(context)
 
                 request(
-                    endpoint = buildEndpoint(serverUrl, endpoint),
+                    endpoint = buildEndpoint(
+                        getServerUrl(context),
+                        endpoint
+                    ),
                     method = "GET",
                     bearerToken = deviceToken
                 )
@@ -240,6 +427,7 @@ object ApiClient {
             callbackSafely(callback, result)
         }
     }
+
 
     /**
      * Existing POST method using device-token authentication.
@@ -250,13 +438,17 @@ object ApiClient {
         callback: (Result<JSONObject>) -> Unit
     ) {
         executor.execute {
+
             val result = runCatching {
+
                 val context = AppContextHolder.context
-                val serverUrl = getServerUrl(context)
                 val deviceToken = getDeviceToken(context)
 
                 request(
-                    endpoint = buildEndpoint(serverUrl, endpoint),
+                    endpoint = buildEndpoint(
+                        getServerUrl(context),
+                        endpoint
+                    ),
                     method = "POST",
                     bearerToken = deviceToken,
                     body = body
@@ -266,6 +458,7 @@ object ApiClient {
             callbackSafely(callback, result)
         }
     }
+
 
     /**
      * Existing explicit-credentials GET method retained.
@@ -277,7 +470,9 @@ object ApiClient {
         callback: (Result<JSONObject>) -> Unit
     ) {
         executor.execute {
+
             val result = runCatching {
+
                 request(
                     endpoint = endpoint,
                     method = "GET",
@@ -290,16 +485,18 @@ object ApiClient {
         }
     }
 
-    private fun getServerUrl(context: android.content.Context): String {
+
+    private fun getServerUrl(context: Context): String {
+
         return SecureConfig.getServerUrl(context)
             ?.trim()
             ?.takeIf { it.isNotEmpty() }
             ?: DEFAULT_SERVER_URL
     }
 
-    private fun getDeviceToken(
-        context: android.content.Context
-    ): String {
+
+    private fun getDeviceToken(context: Context): String {
+
         return SecureConfig.getDeviceToken(context)
             ?.trim()
             ?.takeIf { it.isNotEmpty() }
@@ -308,15 +505,16 @@ object ApiClient {
             )
     }
 
+
     private fun ensureSuccess(
         response: JSONObject,
         defaultMessage: String
     ) {
         if (!response.optBoolean("ok", false)) {
-            // Server-provided error text may contain internal implementation details.
             throw IOException(defaultMessage)
         }
     }
+
 
     /**
      * Shared HTTPS request handler.
@@ -337,20 +535,23 @@ object ApiClient {
         }
 
         if (!parsedUrl.protocol.equals("https", ignoreCase = true)) {
-            throw IOException("Secure connection required. Please try again.")
+            throw IOException(
+                "Secure HTTPS connection is required."
+            )
         }
 
         if (parsedUrl.userInfo != null) {
             throw IOException("Invalid server configuration.")
         }
 
-        // This app is intended to communicate only with the configured SS MediaOS API.
-        // This also protects the explicit-credentials compatibility overload from
-        // accidentally sending tokens to a different HTTPS host.
         val expectedHost = URI(DEFAULT_SERVER_URL).host
+
         if (!parsedUrl.host.equals(expectedHost, ignoreCase = true) ||
-            (parsedUrl.port != -1 && parsedUrl.port != 443)) {
-            throw IOException("Unrecognized server. Check the app configuration.")
+            (parsedUrl.port != -1 && parsedUrl.port != 443)
+        ) {
+            throw IOException(
+                "Unrecognized server. Check the app configuration."
+            )
         }
 
         if (method != "GET" && method != "POST") {
@@ -360,12 +561,18 @@ object ApiClient {
         val connection = (
             parsedUrl.openConnection() as HttpURLConnection
         ).apply {
+
             requestMethod = method
             connectTimeout = CONNECT_TIMEOUT
             readTimeout = READ_TIMEOUT
+
+            // Do not follow redirects carrying authentication data.
             instanceFollowRedirects = false
 
-            setRequestProperty("Accept", "application/json")
+            setRequestProperty(
+                "Accept",
+                "application/json"
+            )
 
             if (!bearerToken.isNullOrBlank()) {
                 setRequestProperty(
@@ -382,11 +589,15 @@ object ApiClient {
             }
 
             if (!deviceId.isNullOrBlank()) {
-                setRequestProperty("X-Device-ID", deviceId)
+                setRequestProperty(
+                    "X-Device-ID",
+                    deviceId
+                )
             }
 
             if (body != null) {
                 doOutput = true
+
                 setRequestProperty(
                     "Content-Type",
                     "application/json; charset=utf-8"
@@ -395,7 +606,9 @@ object ApiClient {
         }
 
         try {
+
             if (body != null) {
+
                 connection.outputStream
                     .bufferedWriter(Charsets.UTF_8)
                     .use { writer ->
@@ -417,28 +630,54 @@ object ApiClient {
                 ?: ""
 
             if (responseCode !in 200..299) {
-                // Keep server diagnostics out of user-visible errors.
-                throw IOException(
-                    "Server request failed (HTTP $responseCode). Please try again."
-                )
+
+                val errorCode = try {
+                    JSONObject(responseBody)
+                        .optString("errorCode", "")
+                } catch (_: Exception) {
+                    ""
+                }
+
+                val message = when (errorCode.uppercase()) {
+                    "ORG_NOT_FOUND" ->
+                        "Organization Code was not found."
+
+                    "ORG_INACTIVE" ->
+                        "This organization is inactive."
+
+                    "MOBILE_MISMATCH" ->
+                        "Registered mobile number does not match."
+
+                    "ORG_UNAUTHORIZED" ->
+                        "Organization is not authorized."
+
+                    else ->
+                        "Server request failed (HTTP $responseCode). Please try again."
+                }
+
+                throw IOException(message)
             }
 
             if (responseBody.isBlank()) {
-                return JSONObject()
+                throw IOException(
+                    "Server returned an empty response."
+                )
             }
 
             return try {
                 JSONObject(responseBody)
             } catch (e: Exception) {
                 throw IOException(
-                    "Server response is not a valid JSON object.",
+                    "Server response is not valid JSON.",
                     e
                 )
             }
+
         } finally {
             connection.disconnect()
         }
     }
+
 
     /**
      * Build a safe endpoint from the configured HTTPS server URL.
@@ -447,6 +686,7 @@ object ApiClient {
         serverUrl: String,
         endpoint: String
     ): String {
+
         val path = endpoint.trim()
 
         require(path.isNotBlank()) {
@@ -469,7 +709,9 @@ object ApiClient {
             "Provide a relative API path, not a full URL."
         }
 
-        val base = URI(serverUrl.trim().trimEnd('/'))
+        val base = URI(
+            serverUrl.trim().trimEnd('/')
+        )
 
         require(
             base.scheme.equals("https", ignoreCase = true) &&
@@ -483,6 +725,7 @@ object ApiClient {
 
         return "${base.toASCIIString()}/${path.trimStart('/')}"
     }
+
 
     private fun <T> callbackSafely(
         callback: (Result<T>) -> Unit,
