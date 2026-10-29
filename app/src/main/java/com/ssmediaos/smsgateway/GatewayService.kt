@@ -56,9 +56,7 @@ class GatewayService : Service() {
                 pollServer()
             }
 
-            if (serviceRunning) {
-                handler.postDelayed(this, POLL_INTERVAL_MS)
-            }
+            handler.postDelayed(this, POLL_INTERVAL_MS)
         }
     }
 
@@ -66,7 +64,10 @@ class GatewayService : Service() {
 
         override fun onReceive(context: Context, intent: Intent) {
 
-            if (intent.action != SmsSentReceiver.ACTION_SMS_PART_RESULT) {
+            if (
+                intent.action !=
+                SmsSentReceiver.ACTION_SMS_PART_RESULT
+            ) {
                 return
             }
 
@@ -163,7 +164,8 @@ class GatewayService : Service() {
 
                     state.completed = true
 
-                    finalSuccess = state.results.values.all { it }
+                    finalSuccess =
+                        state.results.values.all { it }
 
                     finalError = if (finalSuccess == true) {
                         null
@@ -261,52 +263,65 @@ class GatewayService : Service() {
             return
         }
 
-        val serverUrl = SecureConfig.getServerUrl(this)
-        val deviceCode = SecureConfig.getDeviceCode(this)
-        val companyApiKey = SecureConfig.getCompanyApiKey(this)
-        val deviceToken = SecureConfig.getDeviceToken(this)
+        val serverUrl: String = SecureConfig.getServerUrl(this).orEmpty().trim()
+        val deviceCode: String = SecureConfig.getDeviceCode(this).orEmpty().trim()
+        val companyApiKey: String = SecureConfig.getCompanyApiKey(this).orEmpty().trim()
+        val deviceToken: String = SecureConfig.getDeviceToken(this).orEmpty().trim()
 
         if (
             serverUrl.isBlank() ||
             deviceCode.isBlank() ||
             companyApiKey.isBlank()
         ) {
-            blockGatewayStart(
-                startId,
-                "Gateway settings are incomplete. Open Settings."
-            )
+            Log.w(TAG, "Gateway start blocked: required settings missing")
+
+            saveServiceRunning(false)
+            setServerState(STATE_FAILED)
+
+            stopSelf(startId)
             return
         }
 
         if (!SecureConfig.isOrganizationVerified(this)) {
-            blockGatewayStart(
-                startId,
-                "Organization and registered mobile must be verified first."
-            )
+            Log.w(TAG, "Gateway start blocked: organization/mobile is not verified")
+
+            saveServiceRunning(false)
+            setServerState(STATE_FAILED)
+            updateStatus("Organization and registered mobile must be verified first")
+            stopSelf(startId)
             return
         }
 
         if (SecureConfig.getSelectedSimSubscriptionId(this) == null) {
-            blockGatewayStart(
-                startId,
-                "Select an assigned SIM before starting the gateway."
-            )
+            Log.w(TAG, "Gateway start blocked: no SIM has been selected")
+
+            saveServiceRunning(false)
+            setServerState(STATE_FAILED)
+            updateStatus("Select an assigned SIM before starting the gateway")
+            stopSelf(startId)
             return
         }
 
-        if (deviceToken.isNullOrBlank()) {
-            blockGatewayStart(
-                startId,
-                "Device is not activated. Activate it in Gateway Settings."
-            )
+        if (deviceToken.isBlank()) {
+            Log.w(TAG, "Gateway start blocked: device is not activated")
+
+            saveServiceRunning(false)
+            setServerState(STATE_FAILED)
+
+            stopSelf(startId)
             return
         }
 
-        if (!hasSmsPermission()) {
-            blockGatewayStart(
-                startId,
-                "SMS permission is missing. Grant permission in app settings."
-            )
+        if (
+            checkSelfPermission(Manifest.permission.SEND_SMS) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            Log.w(TAG, "Gateway start blocked: SEND_SMS permission missing")
+
+            saveServiceRunning(false)
+            setServerState(STATE_FAILED)
+
+            stopSelf(startId)
             return
         }
 
@@ -315,10 +330,12 @@ class GatewayService : Service() {
         }
 
         if (!receiverRegistered) {
-            blockGatewayStart(
-                startId,
-                "SMS result callback receiver is unavailable."
-            )
+            Log.e(TAG, "Gateway start blocked: callback receiver unavailable")
+
+            saveServiceRunning(false)
+            setServerState(STATE_FAILED)
+
+            stopSelf(startId)
             return
         }
 
@@ -341,6 +358,7 @@ class GatewayService : Service() {
 
             saveServiceRunning(true)
             setServerState(STATE_CONNECTING)
+
             updateStatus("Activated — connecting to server")
 
             Log.i(TAG, "Gateway service started")
@@ -353,7 +371,6 @@ class GatewayService : Service() {
 
             serviceRunning = false
             requestInProgress = false
-            resultReporting = false
 
             saveServiceRunning(false)
             setServerState(STATE_FAILED)
@@ -372,54 +389,14 @@ class GatewayService : Service() {
         }
     }
 
-    private fun blockGatewayStart(
-        startId: Int,
-        message: String
-    ) {
-        Log.w(TAG, "Gateway start blocked: $message")
-
-        serviceRunning = false
-        requestInProgress = false
-        resultReporting = false
-
-        saveServiceRunning(false)
-        setServerState(STATE_FAILED)
-
-        getSharedPreferences(statusPrefsName, MODE_PRIVATE)
-            .edit()
-            .putString(PREF_LAST_STATUS, message)
-            .apply()
-
-        stopSelf(startId)
-    }
-
-    private fun hasSmsPermission(): Boolean {
-        return checkSelfPermission(Manifest.permission.SEND_SMS) ==
-            PackageManager.PERMISSION_GRANTED
-    }
-
     /**
-     * Poll the authenticated server for one queued SMS job.
+     * Fetch one queued job from device_poll.php.
+     *
+     * A successful authenticated polling response marks the server
+     * as connected. Failed requests mark it as failed.
      */
     private fun pollServer() {
         if (!serviceRunning || requestInProgress) return
-
-        // Stop polling work if local verification or activation was cleared.
-        if (!SecureConfig.isOrganizationVerified(this)) {
-            requestInProgress = false
-            updateStatus("SMS blocked: organization verification required")
-            setServerState(STATE_FAILED)
-            stopGateway()
-            return
-        }
-
-        if (SecureConfig.getDeviceToken(this).isNullOrBlank()) {
-            requestInProgress = false
-            updateStatus("SMS blocked: device activation is missing")
-            setServerState(STATE_FAILED)
-            stopGateway()
-            return
-        }
 
         requestInProgress = true
         setServerState(STATE_CONNECTING)
@@ -434,16 +411,19 @@ class GatewayService : Service() {
             result.fold(
                 onSuccess = { response ->
 
+                    val job = response.optJSONObject("job")
+
                     if (!response.optBoolean("ok", false)) {
                         requestInProgress = false
+
                         setServerState(STATE_FAILED)
                         updateStatus("Invalid server response")
+
                         return@fold
                     }
 
+                    // Server has accepted the authenticated poll request.
                     setServerState(STATE_CONNECTED)
-
-                    val job = response.optJSONObject("job")
 
                     if (job == null) {
                         requestInProgress = false
@@ -470,16 +450,12 @@ class GatewayService : Service() {
     }
 
     /**
-     * Validate the current device state and the server-provided job
-     * immediately before submitting an SMS to Android.
+     * Validate a claimed server job and submit it to Android.
      */
     private fun processJob(job: JSONObject) {
 
-        if (!serviceRunning) {
-            requestInProgress = false
-            return
-        }
-
+        // Re-check immediately before each SMS job, not only when the service starts.
+        // This prevents queued jobs from sending after verification/SIM settings change.
         if (!SecureConfig.isOrganizationVerified(this)) {
             Log.w(TAG, "SMS job blocked: organization/mobile is not verified")
             requestInProgress = false
@@ -487,25 +463,7 @@ class GatewayService : Service() {
             return
         }
 
-        // Re-check device activation before every job.
-        if (SecureConfig.getDeviceToken(this).isNullOrBlank()) {
-            Log.w(TAG, "SMS job blocked: device activation is missing")
-            requestInProgress = false
-            updateStatus("SMS blocked: device activation is required")
-            setServerState(STATE_FAILED)
-            return
-        }
-
-        if (!hasSmsPermission()) {
-            Log.w(TAG, "SMS job blocked: SEND_SMS permission is missing")
-            requestInProgress = false
-            updateStatus("SMS blocked: SMS permission is required")
-            return
-        }
-
-        val selectedSubscriptionId =
-            SecureConfig.getSelectedSimSubscriptionId(this)
-
+        val selectedSubscriptionId = SecureConfig.getSelectedSimSubscriptionId(this)
         if (selectedSubscriptionId == null) {
             Log.w(TAG, "SMS job blocked: no SIM is selected")
             requestInProgress = false
@@ -514,9 +472,9 @@ class GatewayService : Service() {
         }
 
         val jobId = job.optLong("id", 0L)
-        val requestId = job.optString("request_id").trim()
-        val phoneNumber = job.optString("to").trim()
-        val message = job.optString("message")
+        val requestId = job.optString("request_id", "").orEmpty().trim()
+        val phoneNumber = job.optString("to", "").orEmpty().trim()
+        val message = job.optString("message", "").orEmpty()
 
         if (
             jobId <= 0L ||
@@ -547,11 +505,13 @@ class GatewayService : Service() {
         updateStatus("Processing SMS job")
         Log.i(TAG, "Processing SMS job ID: $jobId")
 
+        // Register the job BEFORE asking Android to send the SMS.
+        // A sent PendingIntent callback can arrive very quickly; registering
+        // after sendSms() creates a race where that callback is lost.
         val jobState = SmsJobState(requestId = requestId)
         val existingState = smsJobs.putIfAbsent(jobId, jobState)
-
         if (existingState != null) {
-            Log.w(TAG, "Duplicate in-flight SMS job ignored: $jobId")
+            Log.e(TAG, "Duplicate in-flight SMS job ignored: $jobId")
             requestInProgress = false
             updateStatus("Duplicate SMS job ignored — check server")
             return
@@ -571,8 +531,8 @@ class GatewayService : Service() {
             }
 
             is SmsHelper.SendResult.Failure -> {
+                // No Android callback is expected after submission failure.
                 smsJobs.remove(jobId, jobState)
-
                 Log.e(
                     TAG,
                     "SMS submission failed: ${sendResult.reason}"
@@ -589,10 +549,7 @@ class GatewayService : Service() {
     }
 
     /**
-     * Report Android's SMS-send callback result to the server.
-     *
-     * A successful Android SENT callback does not necessarily mean
-     * that the recipient's phone has received the message.
+     * Report the final result to device_result.php.
      */
     private fun reportResult(
         jobId: Long,
@@ -640,24 +597,29 @@ class GatewayService : Service() {
                         return@fold
                     }
 
-                    Log.i(TAG, "Server accepted result for job $jobId")
+                    Log.i(
+                        TAG,
+                        "Server accepted result for job $jobId"
+                    )
 
                     requestInProgress = false
 
                     if (success) {
                         updateStatus(
-                            "SMS send callback successful — waiting for next job"
+                            "SMS sent callback successful — waiting for next job"
                         )
                     } else {
-                        updateStatus("SMS failed — waiting for next job")
+                        updateStatus(
+                            "SMS failed — waiting for next job"
+                        )
                     }
                 },
 
                 onFailure = { exception ->
+
                     Log.e(
                         TAG,
-                        "Could not report result for job $jobId " +
-                            "(${exception.javaClass.simpleName})"
+                        "Could not report result for job $jobId (${exception.javaClass.simpleName})"
                     )
 
                     requestInProgress = false
@@ -667,37 +629,50 @@ class GatewayService : Service() {
         }
     }
 
+    /**
+     * Save whether the Android foreground gateway service is running.
+     */
     private fun saveServiceRunning(running: Boolean) {
-        getSharedPreferences(statusPrefsName, MODE_PRIVATE)
-            .edit()
+        getSharedPreferences(
+            statusPrefsName,
+            MODE_PRIVATE
+        ).edit()
             .putBoolean(PREF_SERVICE_RUNNING, running)
             .apply()
     }
 
+    /**
+     * Save server state and the time of the latest state change.
+     *
+     * MainActivity uses this timestamp to avoid showing an old
+     * connection result as a current connection.
+     */
     private fun setServerState(state: String) {
-        getSharedPreferences(statusPrefsName, MODE_PRIVATE)
-            .edit()
+        getSharedPreferences(
+            statusPrefsName,
+            MODE_PRIVATE
+        ).edit()
             .putString(PREF_SERVER_STATE, state)
             .putLong(PREF_SERVER_CHECK_AT, System.currentTimeMillis())
             .apply()
     }
 
     private fun updateStatus(message: String) {
-        getSharedPreferences(statusPrefsName, MODE_PRIVATE)
-            .edit()
-            .putString(PREF_LAST_STATUS, message)
-            .apply()
-
         if (!serviceRunning) return
 
         try {
             updateNotification(message)
         } catch (exception: Exception) {
-            Log.w(TAG, "Unable to update gateway notification", exception)
+            Log.w(
+                TAG,
+                "Unable to update gateway notification",
+                exception
+            )
         }
     }
 
     private fun stopGateway() {
+
         serviceRunning = false
         requestInProgress = false
         resultReporting = false
@@ -719,28 +694,35 @@ class GatewayService : Service() {
     }
 
     private fun createNotificationChannel() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
 
-        val channel = NotificationChannel(
-            CHANNEL_ID,
-            "SMS Gateway Service",
-            NotificationManager.IMPORTANCE_LOW
-        ).apply {
-            description = "Shows the status of the SS MediaOS SMS Gateway"
-            setShowBadge(false)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+
+            val channel = NotificationChannel(
+                CHANNEL_ID,
+                "SMS Gateway Service",
+                NotificationManager.IMPORTANCE_LOW
+            ).apply {
+                description =
+                    "Shows the status of the SS MediaOS SMS Gateway"
+                setShowBadge(false)
+            }
+
+            val manager =
+                getSystemService(NotificationManager::class.java)
+
+            manager.createNotificationChannel(channel)
         }
-
-        getSystemService(NotificationManager::class.java)
-            .createNotificationChannel(channel)
     }
 
     private fun createNotification(message: String): Notification {
-        val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            Notification.Builder(this, CHANNEL_ID)
-        } else {
-            @Suppress("DEPRECATION")
-            Notification.Builder(this)
-        }
+
+        val builder =
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                Notification.Builder(this, CHANNEL_ID)
+            } else {
+                @Suppress("DEPRECATION")
+                Notification.Builder(this)
+            }
 
         return builder
             .setContentTitle("SS MediaOS SMS Gateway")
@@ -752,8 +734,14 @@ class GatewayService : Service() {
     }
 
     private fun updateNotification(message: String) {
-        getSystemService(NotificationManager::class.java)
-            .notify(NOTIFICATION_ID, createNotification(message))
+
+        val manager =
+            getSystemService(NotificationManager::class.java)
+
+        manager.notify(
+            NOTIFICATION_ID,
+            createNotification(message)
+        )
     }
 
     override fun onTaskRemoved(rootIntent: Intent?) {
@@ -762,6 +750,7 @@ class GatewayService : Service() {
     }
 
     override fun onDestroy() {
+
         serviceRunning = false
         requestInProgress = false
         resultReporting = false
@@ -793,15 +782,16 @@ class GatewayService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     companion object {
+
         private const val TAG = "GatewayService"
         private const val CHANNEL_ID = "sms_gateway_service"
         private const val NOTIFICATION_ID = 1001
+
         private const val POLL_INTERVAL_MS = 5000L
 
         private const val PREF_SERVICE_RUNNING = "service_running"
         private const val PREF_SERVER_STATE = "server_state"
         private const val PREF_SERVER_CHECK_AT = "server_check_at"
-        private const val PREF_LAST_STATUS = "last_status"
 
         private const val STATE_CONNECTED = "CONNECTED"
         private const val STATE_FAILED = "FAILED"
