@@ -2,15 +2,11 @@ package com.ssmediaos.smsgateway
 
 import android.app.Activity
 import android.os.Bundle
+import android.view.View
 import android.widget.Button
 import android.widget.EditText
 import android.widget.TextView
 import android.widget.Toast
-import android.view.View
-import org.json.JSONObject
-import java.io.BufferedReader
-import java.io.InputStreamReader
-import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
 import java.net.URL
 
@@ -21,12 +17,14 @@ class GatewaySettingsActivity : Activity() {
     private lateinit var deviceIdInput: EditText
     private lateinit var organizationCodeInput: EditText
     private lateinit var registeredMobileInput: EditText
+
     private lateinit var organizationNameText: TextView
     private lateinit var organizationStatusText: TextView
     private lateinit var simStatusText: TextView
-    private lateinit var verifyMobileButton: Button
     private lateinit var connectionStatusText: TextView
     private lateinit var activationStatusText: TextView
+
+    private lateinit var verifyMobileButton: Button
     private lateinit var saveSettingsButton: Button
     private lateinit var testConnectionButton: Button
     private lateinit var activateDeviceButton: Button
@@ -35,7 +33,6 @@ class GatewaySettingsActivity : Activity() {
 
     companion object {
         private const val CONNECTION_TIMEOUT = 15000
-        private const val ACTIVATION_READ_TIMEOUT = 20000
 
         private const val PREF_SERVICE_RUNNING = "service_running"
         private const val PREF_SERVER_STATE = "server_state"
@@ -48,29 +45,52 @@ class GatewaySettingsActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
         setContentView(R.layout.activity_gateway_settings)
 
         serverUrlInput = findViewById(R.id.serverUrlInput)
         apiTokenInput = findViewById(R.id.apiTokenInput)
         deviceIdInput = findViewById(R.id.deviceIdInput)
-        organizationCodeInput = findViewById(R.id.organizationCodeInput)
-        registeredMobileInput = findViewById(R.id.registeredMobileInput)
-        organizationNameText = findViewById(R.id.organizationNameText)
-        organizationStatusText = findViewById(R.id.organizationStatusText)
-        simStatusText = findViewById(R.id.simStatusText)
-        verifyMobileButton = findViewById(R.id.verifyMobileButton)
-        connectionStatusText = findViewById(R.id.connectionStatusText)
-        activationStatusText = findViewById(R.id.activationStatusText)
-        saveSettingsButton = findViewById(R.id.saveSettingsButton)
-        testConnectionButton = findViewById(R.id.testConnectionButton)
-        activateDeviceButton = findViewById(R.id.activateDeviceButton)
 
-        // Server URL and Device ID are controlled internally.
+        organizationCodeInput =
+            findViewById(R.id.organizationCodeInput)
+
+        registeredMobileInput =
+            findViewById(R.id.registeredMobileInput)
+
+        organizationNameText =
+            findViewById(R.id.organizationNameText)
+
+        organizationStatusText =
+            findViewById(R.id.organizationStatusText)
+
+        simStatusText =
+            findViewById(R.id.simStatusText)
+
+        verifyMobileButton =
+            findViewById(R.id.verifyMobileButton)
+
+        connectionStatusText =
+            findViewById(R.id.connectionStatusText)
+
+        activationStatusText =
+            findViewById(R.id.activationStatusText)
+
+        saveSettingsButton =
+            findViewById(R.id.saveSettingsButton)
+
+        testConnectionButton =
+            findViewById(R.id.testConnectionButton)
+
+        activateDeviceButton =
+            findViewById(R.id.activateDeviceButton)
+
         serverUrlInput.setText(SecureConfig.DEFAULT_SERVER_URL)
-        serverUrlInput.visibility = View.GONE // Server URL is never shown in the UI.
+        serverUrlInput.visibility = View.GONE
 
-        val deviceCode = SecureConfig.getDeviceCode(this).orEmpty()
-        deviceIdInput.setText(deviceCode)
+        deviceIdInput.setText(
+            SecureConfig.getDeviceCode(this)
+        )
         deviceIdInput.isEnabled = false
 
         loadSettings()
@@ -83,48 +103,82 @@ class GatewaySettingsActivity : Activity() {
             testConnection()
         }
 
+        verifyMobileButton.setOnClickListener {
+            verifyOrganization()
+        }
+
         activateDeviceButton.setOnClickListener {
             activateDevice()
         }
 
-        verifyMobileButton.setOnClickListener {
-            verifyOrganizationAndMobile()
-        }
-
-        updateSimStatusPlaceholder()
+        updateSimStatus()
     }
 
     private fun loadSettings() {
-        serverUrlInput.setText(SecureConfig.DEFAULT_SERVER_URL)
-        serverUrlInput.visibility = View.GONE
+        val prefs = getSharedPreferences(
+            statusPrefsName,
+            MODE_PRIVATE
+        )
 
-        // The XML input should use textPassword so the API key is masked.
+        serverUrlInput.setText(SecureConfig.DEFAULT_SERVER_URL)
+
         apiTokenInput.setText(
             SecureConfig.getCompanyApiKey(this).orEmpty()
         )
 
         deviceIdInput.setText(
-            SecureConfig.getDeviceCode(this).orEmpty()
+            SecureConfig.getDeviceCode(this)
         )
 
-        val prefs = getSharedPreferences(statusPrefsName, MODE_PRIVATE)
-        organizationCodeInput.setText(prefs.getString("organization_code", "").orEmpty())
-        registeredMobileInput.setText(prefs.getString("registered_mobile", "").orEmpty())
-        organizationNameText.text = prefs.getString("organization_name", null)
-            ?.takeIf { it.isNotBlank() } ?: "Organization Name: Not verified"
-        organizationStatusText.text = prefs.getString("organization_status", null)
-            ?.takeIf { it.isNotBlank() } ?: "Organization Verification: PENDING"
+        organizationCodeInput.setText(
+            SecureConfig.getOrganizationCode(this)
+        )
+
+        registeredMobileInput.setText(
+            SecureConfig.getRegisteredMobile(this)
+        )
+
+        // The SecureConfig value is authoritative.
+        val verified = SecureConfig.isOrganizationVerified(this)
+
+        if (verified) {
+            organizationNameText.text =
+                "Organization Name: ${SecureConfig.getOrganizationName(this)}"
+
+            organizationStatusText.text =
+                "Organization Verification: VERIFIED"
+        } else {
+            organizationNameText.text =
+                "Organization Name: Not verified"
+
+            organizationStatusText.text =
+                "Organization Verification: PENDING"
+        }
+
+        prefs.edit()
+            .putBoolean("organization_verified", verified)
+            .apply()
 
         updateActivationStatus()
     }
 
+    /**
+     * Save credentials and entered identity.
+     * Saving does not itself verify the organization.
+     */
     private fun saveSettings(): Boolean {
-        val companyApiKey = apiTokenInput.text.toString().trim()
-        val deviceCode = SecureConfig.getDeviceCode(this).orEmpty()
-        val organizationCode = organizationCodeInput.text.toString().trim()
-        val registeredMobile = registeredMobileInput.text.toString().trim()
+        val activationToken =
+            apiTokenInput.text.toString().trim()
 
-        if (companyApiKey.isBlank()) {
+        val organizationCode =
+            organizationCodeInput.text.toString().trim()
+
+        val mobile =
+            registeredMobileInput.text.toString().trim()
+
+        val deviceCode = SecureConfig.getDeviceCode(this)
+
+        if (activationToken.isBlank()) {
             apiTokenInput.error = "Company API Token required"
             apiTokenInput.requestFocus()
             return false
@@ -136,92 +190,257 @@ class GatewaySettingsActivity : Activity() {
             return false
         }
 
-        if (registeredMobile.isBlank()) {
-            registeredMobileInput.error = "Registered mobile number required"
+        if (!mobile.matches(Regex("^[0-9]{8,15}$"))) {
+            registeredMobileInput.error =
+                "Enter a valid registered mobile number"
             registeredMobileInput.requestFocus()
             return false
         }
 
-        if (registeredMobile.any { !it.isDigit() } || registeredMobile.length !in 8..15) {
-            registeredMobileInput.error = "Enter a valid mobile number (8–15 digits)"
-            registeredMobileInput.requestFocus()
-            return false
-        }
+        val oldToken =
+            SecureConfig.getCompanyApiKey(this).orEmpty()
 
-        if (deviceCode.isBlank()) {
+        val oldCode =
+            SecureConfig.getOrganizationCode(this)
+
+        val oldMobile =
+            SecureConfig.getRegisteredMobile(this)
+
+        val identityChanged =
+            oldCode != organizationCode ||
+            oldMobile != mobile ||
+            oldToken != activationToken
+
+        val credentialsSaved = SecureConfig.saveActivationSettings(
+            context = this,
+            serverUrl = SecureConfig.DEFAULT_SERVER_URL,
+            deviceCode = deviceCode,
+            activationToken = activationToken
+        )
+
+        if (!credentialsSaved) {
             connectionStatusText.text =
-                "Unable to create this installation's Device ID."
+                "Could not save the activation token securely."
             return false
         }
 
-        return try {
-            val oldApiKey = SecureConfig.getCompanyApiKey(this).orEmpty()
-
-            val saved = SecureConfig.saveActivationSettings(
-                context = this,
-                serverUrl = SecureConfig.DEFAULT_SERVER_URL,
-                deviceCode = deviceCode,
-                activationToken = companyApiKey
+        /*
+         * Save the identity as pending if it changed.
+         * SecureConfig clears previous verification and device token
+         * when the organization code or mobile changes.
+         */
+        if (oldCode != organizationCode || oldMobile != mobile) {
+            val identitySaved = SecureConfig.saveOrganizationIdentity(
+                this,
+                organizationCode,
+                mobile
             )
 
-            if (!saved) {
+            if (!identitySaved) {
                 connectionStatusText.text =
-                    "Settings could not be saved. Please check the Company API Token."
+                    "Could not save the organization details."
                 return false
             }
+        }
 
-            if (oldApiKey != companyApiKey) {
-                SecureConfig.clearDeviceToken(this)
-                setServerState(STATE_CONNECTING)
+        if (identityChanged) {
+            SecureConfig.clearDeviceToken(this)
+
+            getSharedPreferences(statusPrefsName, MODE_PRIVATE)
+                .edit()
+                .putBoolean("organization_verified", false)
+                .putString("organization_status", "PENDING")
+                .remove("organization_name")
+                .apply()
+
+            organizationNameText.text =
+                "Organization Name: Not verified"
+
+            organizationStatusText.text =
+                "Organization Verification: PENDING"
+
+            activationStatusText.text =
+                "Device status: NOT ACTIVATED"
+        }
+
+        updateActivationStatus()
+
+        Toast.makeText(
+            this,
+            "Settings saved securely.",
+            Toast.LENGTH_SHORT
+        ).show()
+
+        return true
+    }
+
+    /**
+     * Verify organization through the server API.
+     * Local values alone are never treated as verified.
+     */
+    private fun verifyOrganization() {
+        if (!saveSettings()) return
+
+        val organizationCode =
+            organizationCodeInput.text.toString().trim()
+
+        val mobile =
+            registeredMobileInput.text.toString().trim()
+
+        verifyMobileButton.isEnabled = false
+
+        organizationNameText.text =
+            "Organization Name: Checking..."
+
+        organizationStatusText.text =
+            "Organization Verification: CHECKING"
+
+        connectionStatusText.text =
+            "Checking organization details with the server..."
+
+        activationStatusText.text =
+            "Device status: NOT ACTIVATED"
+
+        getSharedPreferences(statusPrefsName, MODE_PRIVATE)
+            .edit()
+            .putBoolean("organization_verified", false)
+            .putString("organization_status", "CHECKING")
+            .remove("organization_name")
+            .apply()
+
+        SecureConfig.clearOrganizationVerification(this)
+
+        /*
+         * Capture input values so an old response cannot verify
+         * details that the user has changed while the request runs.
+         */
+        val requestedCode = organizationCode
+        val requestedMobile = mobile
+        val requestedToken =
+            apiTokenInput.text.toString().trim()
+
+        ApiClient.verifyOrganization(
+            organizationCode = requestedCode,
+            registeredMobile = requestedMobile
+        ) { result ->
+
+            runOnUiThread {
+                verifyMobileButton.isEnabled = true
+
+                val currentDetailsMatch =
+                    organizationCodeInput.text.toString().trim() ==
+                        requestedCode &&
+                    registeredMobileInput.text.toString().trim() ==
+                        requestedMobile &&
+                    apiTokenInput.text.toString().trim() ==
+                        requestedToken
+
+                if (!currentDetailsMatch) {
+                    SecureConfig.clearOrganizationVerification(this)
+
+                    organizationNameText.text =
+                        "Organization Name: Not verified"
+
+                    organizationStatusText.text =
+                        "Organization Verification: PENDING"
+
+                    connectionStatusText.text =
+                        "Details changed. Verify again."
+
+                    updateActivationStatus()
+                    return@runOnUiThread
+                }
+
+                result.fold(
+                    onSuccess = { response ->
+
+                        val name = response
+                            .optString("organizationName")
+                            .trim()
+
+                        if (name.isBlank() ||
+                            !SecureConfig.isOrganizationVerified(this)
+                        ) {
+                            SecureConfig.clearOrganizationVerification(this)
+
+                            organizationNameText.text =
+                                "Organization Name: Not verified"
+
+                            organizationStatusText.text =
+                                "Organization Verification: REJECTED"
+
+                            connectionStatusText.text =
+                                "Server did not confirm verification."
+
+                            updateActivationStatus()
+                            return@fold
+                        }
+
+                        getSharedPreferences(
+                            statusPrefsName,
+                            MODE_PRIVATE
+                        ).edit()
+                            .putBoolean("organization_verified", true)
+                            .putString("organization_status", "VERIFIED")
+                            .putString("organization_name", name)
+                            .apply()
+
+                        organizationNameText.text =
+                            "Organization Name: $name"
+
+                        organizationStatusText.text =
+                            "Organization Verification: VERIFIED"
+
+                        connectionStatusText.text =
+                            response.optString(
+                                "message",
+                                "Organization verified successfully."
+                            )
+
+                        Toast.makeText(
+                            this,
+                            "Organization verified successfully.",
+                            Toast.LENGTH_LONG
+                        ).show()
+
+                        updateActivationStatus()
+                    },
+
+                    onFailure = { error ->
+
+                        SecureConfig.clearOrganizationVerification(this)
+
+                        organizationNameText.text =
+                            "Organization Name: Not verified"
+
+                        organizationStatusText.text =
+                            "Organization Verification: REJECTED"
+
+                        connectionStatusText.text =
+                            error.message
+                                ?: "Organization verification failed."
+
+                        updateActivationStatus()
+                    }
+                )
             }
-
-            val prefs = getSharedPreferences(statusPrefsName, MODE_PRIVATE)
-            val oldOrganizationCode = prefs.getString("organization_code", "").orEmpty()
-            val oldRegisteredMobile = prefs.getString("registered_mobile", "").orEmpty()
-            val identityChanged =
-                oldOrganizationCode != organizationCode ||
-                oldRegisteredMobile != registeredMobile ||
-                oldApiKey != companyApiKey
-
-            val editor = prefs.edit()
-                .putString("organization_code", organizationCode)
-                .putString("registered_mobile", registeredMobile)
-            if (identityChanged) {
-                editor.putString("organization_status", "PENDING")
-                    .remove("organization_name")
-                    .putBoolean("organization_verified", false)
-                SecureConfig.clearDeviceToken(this)
-                organizationNameText.text = "Organization Name: Not verified"
-                organizationStatusText.text = "Organization Verification: PENDING"
-            }
-            editor.apply()
-
-            updateActivationStatus()
-
-            Toast.makeText(
-                this,
-                "Company API Token saved successfully",
-                Toast.LENGTH_SHORT
-            ).show()
-
-            true
-        } catch (e: Exception) {
-            connectionStatusText.text =
-                "Settings could not be saved. Please try again."
-            false
         }
     }
 
+    /**
+     * Test whether the official server responds over HTTPS.
+     * This tests reachability, not organization authorization.
+     */
     private fun testConnection() {
         if (!saveSettings()) return
 
-        connectionStatusText.text = "Checking server connection..."
         testConnectionButton.isEnabled = false
+        connectionStatusText.text = "Checking server connection..."
 
         Thread {
-            var reachable = false
+            var connected = false
 
-            val resultText = try {
+            val message = try {
                 val connection = URL(
                     "${SecureConfig.DEFAULT_SERVER_URL}/"
                 ).openConnection() as HttpURLConnection
@@ -230,451 +449,146 @@ class GatewaySettingsActivity : Activity() {
                 connection.connectTimeout = CONNECTION_TIMEOUT
                 connection.readTimeout = CONNECTION_TIMEOUT
                 connection.useCaches = false
-                connection.instanceFollowRedirects = true
+                connection.instanceFollowRedirects = false
 
                 try {
-                    val statusCode = connection.responseCode
-                    reachable = statusCode in 200..299
+                    val code = connection.responseCode
+                    connected = code in 200..299
 
-                    if (reachable) {
-                        "Server is reachable (HTTP $statusCode)."
+                    if (connected) {
+                        "Server is reachable (HTTP $code)."
                     } else {
-                        "Server responded with HTTP $statusCode."
+                        "Server responded with HTTP $code."
                     }
                 } finally {
                     connection.disconnect()
                 }
-            } catch (e: Exception) {
-                "Connection failed. Check your internet connection and try again."
+            } catch (_: Exception) {
+                "Connection failed. Check internet or server availability."
             }
 
             runOnUiThread {
-                connectionStatusText.text = resultText
-
-                if (!reachable) {
-                    setServerState(STATE_FAILED)
-                }
-
                 testConnectionButton.isEnabled = true
-                updateActivationStatus()
-            }
-        }.start()
-    }
-
-    private fun activateDevice() {
-        if (!saveSettings()) return
-
-        activateDeviceButton.isEnabled = false
-        activateDeviceButton.text = "Connecting..."
-        activationStatusText.text =
-            "Device status: ACTIVATION IN PROGRESS"
-        connectionStatusText.text =
-            "Connecting securely to SS MediaOS..."
-
-        val serverUrl = SecureConfig.DEFAULT_SERVER_URL
-        val deviceCode = SecureConfig.getDeviceCode(this).orEmpty()
-        val companyApiKey = SecureConfig.getCompanyApiKey(this).orEmpty()
-        val prefs = getSharedPreferences(statusPrefsName, MODE_PRIVATE)
-        val organizationVerified = prefs.getBoolean("organization_verified", false)
-
-        if (!organizationVerified) {
-            activateDeviceButton.isEnabled = true
-            activateDeviceButton.text = "Verify/Connect Device"
-            connectionStatusText.text =
-                "Verify the Organization Code and registered mobile number first."
-            return
-        }
-
-        if (deviceCode.isBlank() || companyApiKey.isBlank()) {
-            activateDeviceButton.isEnabled = true
-            activateDeviceButton.text = "Verify/Connect Device"
-            connectionStatusText.text =
-                "Device ID or Company API Token is missing."
-            return
-        }
-
-        setServerState(STATE_CONNECTING)
-
-        Thread {
-            var success = false
-            var message = "Activation failed."
-
-            try {
-                val endpoint =
-                    "$serverUrl/api/v1/sms/device_activate.php"
-
-                val connection = URL(endpoint)
-                    .openConnection() as HttpURLConnection
-
-                connection.requestMethod = "POST"
-                connection.connectTimeout = CONNECTION_TIMEOUT
-                connection.readTimeout = ACTIVATION_READ_TIMEOUT
-                connection.doOutput = true
-                connection.useCaches = false
-
-                connection.setRequestProperty(
-                    "Content-Type",
-                    "application/json; charset=UTF-8"
-                )
-                connection.setRequestProperty(
-                    "Accept",
-                    "application/json"
-                )
-
-                val organizationCode = organizationCodeInput.text.toString().trim()
-                val registeredMobile = registeredMobileInput.text.toString().trim()
-
-                val requestBody = JSONObject().apply {
-                    put("deviceCode", deviceCode)
-                    put("companyApiKey", companyApiKey)
-                    put("organizationCode", organizationCode)
-                    put("registeredMobileNumber", registeredMobile)
-                }.toString()
-
-                try {
-                    OutputStreamWriter(
-                        connection.outputStream,
-                        Charsets.UTF_8
-                    ).use { writer ->
-                        writer.write(requestBody)
-                        writer.flush()
-                    }
-
-                    val statusCode = connection.responseCode
-
-                    val responseStream = if (statusCode in 200..299) {
-                        connection.inputStream
-                    } else {
-                        connection.errorStream
-                    }
-
-                    val responseText = responseStream?.use { stream ->
-                        BufferedReader(
-                            InputStreamReader(stream, Charsets.UTF_8)
-                        ).use { reader ->
-                            reader.readText()
-                        }
-                    }.orEmpty()
-
-                    val response = try {
-                        JSONObject(responseText)
-                    } catch (_: Exception) {
-                        JSONObject()
-                    }
-
-                    val serverMessage = response.optString(
-                        "message",
-                        "Server returned HTTP $statusCode"
-                    )
-
-                    val deviceToken = response.optString(
-                        "deviceToken",
-                        ""
-                    ).trim()
-
-                    if (
-                        statusCode in 200..299 &&
-                        response.optBoolean("ok", false) &&
-                        deviceToken.isNotBlank()
-                    ) {
-                        if (SecureConfig.saveDeviceToken(this, deviceToken)) {
-                            success = true
-                            message = "Device activated successfully."
-                        } else {
-                            SecureConfig.clearDeviceToken(this)
-                            message =
-                                "Activation succeeded, but the device token could not be saved."
-                        }
-                    } else {
-                        message = serverMessage
-
-                        if (statusCode !in 200..299) {
-                            message += " (HTTP $statusCode)"
-                        }
-                    }
-                } finally {
-                    connection.disconnect()
-                }
-            } catch (e: Exception) {
-                message =
-                    "Activation failed. Check your connection and try again."
-            }
-
-            runOnUiThread {
-                activateDeviceButton.isEnabled = true
-                activateDeviceButton.text = "Verify/Connect Device"
                 connectionStatusText.text = message
 
-                if (success) {
-                    activationStatusText.text = "Device status: ACTIVATED"
+                setServerState(
+                    if (connected) STATE_CONNECTED else STATE_FAILED
+                )
 
-                    Toast.makeText(
-                        this,
-                        "Device activated successfully",
-                        Toast.LENGTH_LONG
-                    ).show()
-                } else {
-                    SecureConfig.clearDeviceToken(this)
-                    setServerState(STATE_FAILED)
-
-                    activationStatusText.text =
-                        "Device status: NOT ACTIVATED"
-
+                if (!connected) {
                     Toast.makeText(
                         this,
                         message,
                         Toast.LENGTH_LONG
                     ).show()
                 }
-
-                updateActivationStatus()
             }
         }.start()
     }
 
     /**
-     * Calls the organization verification API. The server endpoint must validate
-     * the Company API Key, Organization Code and registered mobile number against
-     * authoritative server records and return { ok:true, organizationName:"..." }.
+     * Activate only after server verification.
      */
-    private fun verifyOrganizationAndMobile() {
-        val companyApiKey = apiTokenInput.text.toString().trim()
-        val organizationCode = organizationCodeInput.text.toString().trim()
-        val registeredMobile = registeredMobileInput.text.toString().trim()
-
-        if (companyApiKey.isBlank()) {
-            apiTokenInput.error = "Company API Key required"
-            apiTokenInput.requestFocus()
-            return
-        }
-        if (organizationCode.isBlank()) {
-            organizationCodeInput.error = "Organization Code required"
-            organizationCodeInput.requestFocus()
-            return
-        }
-        if (registeredMobile.any { !it.isDigit() } || registeredMobile.length !in 8..15) {
-            registeredMobileInput.error = "Enter a valid mobile number (8–15 digits)"
-            registeredMobileInput.requestFocus()
+    private fun activateDevice() {
+        if (!SecureConfig.isOrganizationVerified(this)) {
+            connectionStatusText.text =
+                "Verify the Organization Code and registered mobile first."
             return
         }
 
-        // Capture the exact identity being verified. A response for old details
-        // must never verify details the user changed while the request was running.
-        val requestedApiKey = companyApiKey
-        val requestedOrganizationCode = organizationCode
-        val requestedRegisteredMobile = registeredMobile
+        if (!saveSettings()) return
 
-        // Fail closed while checking: discard any old verification/device token.
-        getSharedPreferences(statusPrefsName, MODE_PRIVATE).edit()
-            .putBoolean("organization_verified", false)
-            .putString("organization_status", "CHECKING")
-            .remove("organization_name")
-            .apply()
-        SecureConfig.clearDeviceToken(this)
-        organizationNameText.text = "Organization Name: Not verified"
-        organizationStatusText.text = "Organization Verification: CHECKING"
-        activationStatusText.text = "Device status: NOT ACTIVATED"
+        if (!SecureConfig.isOrganizationVerified(this)) {
+            connectionStatusText.text =
+                "Organization verification is required."
+            return
+        }
 
-        verifyMobileButton.isEnabled = false
-        organizationStatusText.text = "Organization Verification: CHECKING"
-        organizationNameText.text = "Organization Name: Checking..."
-        connectionStatusText.text = "Verifying organization and registered mobile..."
+        activateDeviceButton.isEnabled = false
+        activateDeviceButton.text = "Activating..."
+        connectionStatusText.text = "Requesting device activation..."
 
-        Thread {
-            var verified = false
-            var organizationName = ""
-            var message = "Organization verification failed."
+        setServerState(STATE_CONNECTING)
 
-            try {
-                val endpoint =
-                    "${SecureConfig.DEFAULT_SERVER_URL}/api/v1/sms/organization_verify.php"
-                val connection = URL(endpoint).openConnection() as HttpURLConnection
-                connection.requestMethod = "POST"
-                connection.connectTimeout = CONNECTION_TIMEOUT
-                connection.readTimeout = ACTIVATION_READ_TIMEOUT
-                connection.doOutput = true
-                connection.useCaches = false
-                connection.setRequestProperty("Content-Type", "application/json; charset=UTF-8")
-                connection.setRequestProperty("Accept", "application/json")
-                connection.setRequestProperty("Authorization", "Bearer $companyApiKey")
-
-                try {
-                    val body = JSONObject()
-                        .put("companyApiKey", companyApiKey)
-                        .put("organizationCode", organizationCode)
-                        .put("registeredMobileNumber", registeredMobile)
-                        .toString()
-
-                    OutputStreamWriter(connection.outputStream, Charsets.UTF_8).use {
-                        it.write(body)
-                        it.flush()
-                    }
-
-                    val statusCode = connection.responseCode
-                    val stream = if (statusCode in 200..299) {
-                        connection.inputStream
-                    } else {
-                        connection.errorStream
-                    }
-                    val responseText = stream?.use {
-                        BufferedReader(InputStreamReader(it, Charsets.UTF_8)).use { reader ->
-                            reader.readText()
-                        }
-                    }.orEmpty()
-                    val response = try { JSONObject(responseText) } catch (_: Exception) {
-                        JSONObject()
-                    }
-
-                    verified = statusCode in 200..299 &&
-                        response.optBoolean("ok", false) &&
-                        response.optString("organizationName").isNotBlank()
-
-                    organizationName = response.optString("organizationName").trim()
-                    message = response.optString(
-                        "message",
-                        if (verified) "Organization verified successfully."
-                        else "Server could not verify this organization and mobile number."
-                    )
-                    if (statusCode !in 200..299) message += " (HTTP $statusCode)"
-                } finally {
-                    connection.disconnect()
-                }
-            } catch (_: Exception) {
-                message =
-                    "Verification API unavailable. Confirm the server endpoint and internet connection."
-            }
+        ApiClient.activate { result ->
 
             runOnUiThread {
-                verifyMobileButton.isEnabled = true
+                activateDeviceButton.isEnabled = true
+                activateDeviceButton.text = "Verify/Connect Device"
 
-                // Ignore stale server responses if any identity field changed in flight.
-                val currentApiKey = apiTokenInput.text.toString().trim()
-                val currentOrganizationCode = organizationCodeInput.text.toString().trim()
-                val currentRegisteredMobile = registeredMobileInput.text.toString().trim()
-                val identityStillMatches =
-                    currentApiKey == requestedApiKey &&
-                    currentOrganizationCode == requestedOrganizationCode &&
-                    currentRegisteredMobile == requestedRegisteredMobile
+                result.fold(
+                    onSuccess = {
+                        connectionStatusText.text =
+                            "Device activated successfully."
 
-                if (!identityStillMatches) {
-                    val prefs = getSharedPreferences(statusPrefsName, MODE_PRIVATE)
-                    prefs.edit()
-                        .putBoolean("organization_verified", false)
-                        .putString("organization_status", "PENDING")
-                        .remove("organization_name")
-                        .apply()
-                    SecureConfig.clearDeviceToken(this)
-                    organizationNameText.text = "Organization Name: Not verified"
-                    organizationStatusText.text = "Organization Verification: PENDING"
-                    connectionStatusText.text =
-                        "Details changed during verification. Verify again with the current details."
-                    updateActivationStatus()
-                    return@runOnUiThread
-                }
+                        activationStatusText.text =
+                            "Device status: ACTIVATED"
 
-                val prefs = getSharedPreferences(statusPrefsName, MODE_PRIVATE)
-                prefs.edit()
-                    .putBoolean("organization_verified", verified)
-                    .putString("organization_status", if (verified) "VERIFIED" else "REJECTED")
-                    .apply()
+                        setServerState(STATE_CONNECTED)
 
-                if (verified) {
-                    prefs.edit().putString("organization_name", organizationName).apply()
-                    organizationNameText.text = "Organization Name: $organizationName"
-                    organizationStatusText.text = "Organization Verification: VERIFIED"
-                } else {
-                    prefs.edit().remove("organization_name").apply()
-                    organizationNameText.text = "Organization Name: Not verified"
-                    organizationStatusText.text = "Organization Verification: REJECTED"
-                    SecureConfig.clearDeviceToken(this)
-                }
-                connectionStatusText.text = message
+                        Toast.makeText(
+                            this,
+                            "Device activated successfully.",
+                            Toast.LENGTH_LONG
+                        ).show()
+                    },
+
+                    onFailure = { error ->
+                        SecureConfig.clearDeviceToken(this)
+
+                        connectionStatusText.text =
+                            error.message ?: "Device activation failed."
+
+                        activationStatusText.text =
+                            "Device status: NOT ACTIVATED"
+
+                        setServerState(STATE_FAILED)
+
+                        Toast.makeText(
+                            this,
+                            connectionStatusText.text,
+                            Toast.LENGTH_LONG
+                        ).show()
+                    }
+                )
+
                 updateActivationStatus()
             }
-        }.start()
+        }
     }
 
-    private fun updateSimStatusPlaceholder() {
-        // Actual SIM/subscription selection belongs in SmsHelper and needs runtime
-        // permission checks. Do not claim a SIM is verified before that integration.
+    private fun updateSimStatus() {
         simStatusText.text =
-            "SIM status: Will be checked by the SMS sending service"
+            "SIM status: Checked by the SMS sending service"
     }
 
     private fun updateActivationStatus() {
-        val deviceToken = SecureConfig.getDeviceToken(this)
-        val companyApiKey = SecureConfig.getCompanyApiKey(this)
-        val deviceCode = SecureConfig.getDeviceCode(this)
-        val organizationVerified = getSharedPreferences(
-            statusPrefsName, MODE_PRIVATE
-        ).getBoolean("organization_verified", false)
+        val verified =
+            SecureConfig.isOrganizationVerified(this)
+
+        val deviceToken =
+            SecureConfig.getDeviceToken(this)
+
+        val apiToken =
+            SecureConfig.getCompanyApiKey(this)
+
+        val deviceCode =
+            SecureConfig.getDeviceCode(this)
 
         if (
+            !verified ||
             deviceToken.isNullOrBlank() ||
-            companyApiKey.isNullOrBlank() ||
-            deviceCode.isNullOrBlank() ||
-            !organizationVerified
+            apiToken.isNullOrBlank() ||
+            deviceCode.isBlank()
         ) {
-            activationStatusText.text = "Device status: NOT ACTIVATED"
+            activationStatusText.text =
+                "Device status: NOT ACTIVATED"
 
-            if (connectionStatusText.text.isNullOrBlank()) {
-                connectionStatusText.text =
-                    "Enter the Company API Token and activate this device."
-            }
             return
         }
 
-        activationStatusText.text = "Device status: ACTIVATED"
-
-        val prefs = getSharedPreferences(
-            statusPrefsName,
-            MODE_PRIVATE
-        )
-
-        val serviceRunning = prefs.getBoolean(
-            PREF_SERVICE_RUNNING,
-            false
-        )
-
-        val serverState = prefs.getString(
-            PREF_SERVER_STATE,
-            STATE_CONNECTING
-        ) ?: STATE_CONNECTING
-
-        val lastCheckAt = prefs.getLong(
-            PREF_SERVER_CHECK_AT,
-            0L
-        )
-
-        val isRecent = lastCheckAt > 0L &&
-            System.currentTimeMillis() - lastCheckAt <= 30000L
-
-        when {
-            !serviceRunning -> {
-                connectionStatusText.text =
-                    "Device activated. Gateway service is not running."
-            }
-
-            !isRecent -> {
-                connectionStatusText.text =
-                    "Device activated. Waiting for a fresh server connection check."
-            }
-
-            serverState == STATE_CONNECTED -> {
-                connectionStatusText.text =
-                    "Device activated. Server connection confirmed by gateway polling."
-            }
-
-            serverState == STATE_FAILED -> {
-                connectionStatusText.text =
-                    "Device activated, but server connection failed. Retrying..."
-            }
-
-            else -> {
-                connectionStatusText.text =
-                    "Device activated. Connecting to server..."
-            }
-        }
+        activationStatusText.text =
+            "Device status: ACTIVATED"
     }
 
     private fun setServerState(state: String) {
@@ -683,7 +597,10 @@ class GatewaySettingsActivity : Activity() {
             MODE_PRIVATE
         ).edit()
             .putString(PREF_SERVER_STATE, state)
-            .putLong(PREF_SERVER_CHECK_AT, System.currentTimeMillis())
+            .putLong(
+                PREF_SERVER_CHECK_AT,
+                System.currentTimeMillis()
+            )
             .apply()
     }
 
@@ -691,7 +608,7 @@ class GatewaySettingsActivity : Activity() {
         super.onResume()
 
         if (::activationStatusText.isInitialized) {
-            updateActivationStatus()
+            loadSettings()
         }
     }
 }
