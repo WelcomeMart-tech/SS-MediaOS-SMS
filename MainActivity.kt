@@ -2,6 +2,7 @@ package com.ssmediaos.smsgateway
 
 import android.Manifest
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
@@ -160,17 +161,6 @@ class MainActivity : Activity() {
             }
         )
 
-        header.addView(
-            textView(
-                "Developer: Shivam Yadav",
-                12f,
-                Color.rgb(220, 232, 255),
-                false
-            ).apply {
-                setPadding(0, dp(5), 0, 0)
-            }
-        )
-
         content.addView(
             header,
             LinearLayout.LayoutParams(
@@ -204,7 +194,7 @@ class MainActivity : Activity() {
         val connectionCard = createStatCard(
             "SERVER",
             "CHECKING",
-            "Configuration status",
+            "Live connection status",
             blue
         )
 
@@ -361,8 +351,8 @@ class MainActivity : Activity() {
 
         settingsCard.addView(
             textView(
-                "Configure the SS MediaOS server and activate this " +
-                    "device before sending SMS.",
+                "Configure the SS MediaOS server and activate this device " +
+                    "before sending SMS.",
                 13f,
                 textMuted,
                 false
@@ -463,7 +453,47 @@ class MainActivity : Activity() {
             }
         )
 
-        // Footer
+        // Legal, privacy and responsible-messaging policies
+        content.addView(
+            sectionTitle(
+                "Privacy & Messaging Policies",
+                "Clear rules for data protection and responsible SMS use"
+            )
+        )
+
+        val policyCard = createCard()
+        policyCard.addView(
+            textView(
+                "Please review how this gateway handles device data and SMS requests.",
+                13f,
+                textMuted,
+                false
+            ).apply { setPadding(0, 0, 0, dp(12)) }
+        )
+        policyCard.addView(
+            actionButton("🔒   Privacy Policy", navy) {
+                showPolicyDialog("Privacy Policy", privacyPolicyText())
+            }, buttonLayout()
+        )
+        policyCard.addView(
+            actionButton("📡   Telecom & SMS Policy", blue) {
+                showPolicyDialog("Telecom & SMS Policy", telecomSmsPolicyText())
+            }, buttonLayout()
+        )
+        policyCard.addView(
+            actionButton("🛡   DND, Consent & Opt-out Rules", Color.rgb(15, 118, 110)) {
+                showPolicyDialog("DND, Consent & Opt-out Rules", dndPolicyText())
+            }, buttonLayout()
+        )
+        content.addView(
+            policyCard,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = dp(22) }
+        )
+
+        // Footer: developer credit intentionally shown only here
         val footer = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
@@ -481,7 +511,7 @@ class MainActivity : Activity() {
 
         footer.addView(
             textView(
-                "Developed by Shivam Yadav",
+                "Delivered by Shivam Yadav",
                 12f,
                 textMuted,
                 false
@@ -512,6 +542,73 @@ class MainActivity : Activity() {
         setContentView(root)
     }
 
+    private fun showPolicyDialog(title: String, body: String) {
+        AlertDialog.Builder(this)
+            .setTitle(title)
+            .setMessage(body)
+            .setPositiveButton("Close", null)
+            .show()
+    }
+
+    private fun privacyPolicyText(): String = """
+SS MediaOS SMS Gateway — Privacy Policy
+
+Purpose
+The app sends SMS only for authorized jobs received from the configured SS MediaOS API. The organization/entity code is verified by the server; the app must not guess the organization or route messages by itself.
+
+Data handled
+Depending on the API features enabled, the app may send the device code, activation/device token, recipient number, message content required to send an authorized job, job/request ID, send result, error details and timestamps to the configured SS MediaOS server. Keep API keys and tokens private.
+
+Incoming SMS
+This app is designed not to read, collect, store, or forward personal incoming SMS or OTP inbox messages. It requires SMS-send permission only to perform authorized outbound jobs. Do not add READ_SMS or RECEIVE_SMS permissions without a separate, lawful and explicit product requirement.
+
+Use and retention
+The server operator should restrict access to authorized staff, protect data in transit using HTTPS, apply access controls, and retain message data only as long as needed for service, audit, dispute handling or legal obligations. The app's actual retention period depends on the connected server configuration.
+
+Mobile number and support
+Any registered mobile-number change must be verified by the server before it is accepted. Do not treat a number as changed solely because a user typed it into the app.
+
+Security and contact
+Do not share device tokens or API keys. For access, correction, deletion or privacy questions, contact the organization that operates your SS MediaOS account. The operator should publish its verified support contact and applicable retention details before production use.
+
+This in-app notice is a product summary, not a legal opinion. The service operator must review it against its actual backend practices and applicable law before public release.
+    """.trimIndent()
+
+    private fun telecomSmsPolicyText(): String = """
+Telecom & SMS Usage Policy
+
+1. Authorized use only
+SMS may be sent only for a valid, server-authorized job linked to a verified organization/entity account. Never use this gateway for spam, fraud, impersonation, harassment, unsolicited bulk messaging or unlawful content.
+
+2. Sender and message compliance
+The organization operating the service is responsible for using the appropriate telecom provider, registered sender/header, approved content template, principal-entity registration and other requirements that apply to its message category. Where Indian TRAI/DLT rules apply, follow the current rules and directions of TRAI, the Department of Telecommunications, the access provider and applicable law.
+
+3. Consent and purpose
+Keep evidence of recipient consent where required. Send only messages relevant to the stated purpose and permitted category. Do not reuse contact numbers for unrelated marketing.
+
+4. Delivery status
+Queued, submitted/sent, failed and delivered are different states. The app can report a device send result; a message must be marked Delivered only when a reliable delivery receipt/status is received from the telecom provider or connected API. A successful device submission is not proof of delivery.
+
+5. Security and abuse prevention
+Use HTTPS, protect tokens, limit request rates, validate recipient numbers and message lengths, maintain auditable server logs, and suspend compromised or misused devices. Never bypass telecom controls or provider restrictions.
+
+The server owner and messaging organization are responsible for legal compliance and provider configuration. This policy does not itself register a sender, header, template or DLT entity.
+    """.trimIndent()
+
+    private fun dndPolicyText(): String = """
+DND, Consent & Opt-out Rules
+
+• Respect recipient preferences and Do Not Disturb (DND) registrations according to the message category and current telecom rules.
+• Do not assume that a message is allowed merely because a phone number is available. Confirm the lawful basis/consent and permitted category before queuing it.
+• Promotional messages must follow applicable TRAI commercial-communications/DLT requirements, including sender/header, template, consent and time-window rules where applicable.
+• Service, transactional, OTP and other permitted messages must still meet the conditions applicable to that category; do not mislabel promotional content to avoid DND restrictions.
+• Provide a clear opt-out or preference-management path for messages where required, process opt-outs promptly, and keep suppression lists on the server so blocked recipients are not queued again.
+• Never use this app to evade DND, caller/customer preferences, rate limits, telecom-provider blocks or legal restrictions.
+• If consent, category, sender registration or eligibility cannot be verified by the API, the server should reject the job rather than send it.
+
+These are safety/compliance principles, not a substitute for checking the latest official TRAI and telecom-provider requirements for your exact SMS category before launch.
+    """.trimIndent()
+
     private fun createStatCard(
         label: String,
         value: String,
@@ -539,6 +636,7 @@ class MainActivity : Activity() {
                 "SMS PERMISSION" -> "value_SMS_PERMISSION"
                 else -> "value_$label"
             }
+
             setPadding(0, dp(10), 0, dp(4))
         }
 
@@ -709,6 +807,7 @@ class MainActivity : Activity() {
             updateStatus(
                 "Complete Gateway Settings before starting the gateway."
             )
+
             showToast(
                 "Please save the server URL, Device Code and " +
                     "Activation Token first."
@@ -721,6 +820,7 @@ class MainActivity : Activity() {
                 "This device is not activated yet. " +
                     "Activate it in Gateway Settings."
             )
+
             showToast(
                 "Activate this device before starting the gateway."
             )
@@ -742,9 +842,13 @@ class MainActivity : Activity() {
             }
 
             gatewayStartRequested = true
-            updateStatus("Gateway service start requested.")
+
+            updateStatus(
+                "Gateway service start requested. Waiting for server response."
+            )
         } catch (e: Exception) {
             gatewayStartRequested = false
+
             updateStatus(
                 "Could not start service: ${e.localizedMessage}"
             )
@@ -777,13 +881,23 @@ class MainActivity : Activity() {
             )
         } catch (e: Exception) {
             showToast(
-                "Could not open Gateway Settings. " +
-                    "Check AndroidManifest.xml. " +
+                "Could not open Gateway Settings. Check AndroidManifest.xml. " +
                     (e.localizedMessage ?: "")
             )
         }
     }
 
+    /**
+     * SERVER status is based on the latest result recorded by GatewayService.
+     *
+     * A saved device token alone does not mean the server is currently reachable.
+     * GatewayService must write these preferences after its actual polling result:
+     *
+     * ss_mediaos_gateway_status:
+     *   service_running  : Boolean
+     *   server_state     : CONNECTED / FAILED / CONNECTING
+     *   server_check_at  : Long (System.currentTimeMillis())
+     */
     private fun updateStatus(message: String? = null) {
         val smsGranted =
             checkSelfPermission(Manifest.permission.SEND_SMS) ==
@@ -793,6 +907,85 @@ class MainActivity : Activity() {
         val deviceCode = SecureConfig.getDeviceCode(this)
         val activationToken = SecureConfig.getActivationToken(this)
         val deviceToken = SecureConfig.getDeviceToken(this)
+
+        val serverPrefs = getSharedPreferences(
+            SERVER_STATUS_PREFS,
+            MODE_PRIVATE
+        )
+
+        val serviceRunning = serverPrefs.getBoolean(
+            PREF_SERVICE_RUNNING,
+            false
+        )
+
+        val serverState = serverPrefs.getString(
+            PREF_SERVER_STATE,
+            SERVER_STATE_CONNECTING
+        ) ?: SERVER_STATE_CONNECTING
+
+        val lastCheckAt = serverPrefs.getLong(
+            PREF_SERVER_CHECK_AT,
+            0L
+        )
+
+        val now = System.currentTimeMillis()
+
+        val hasServerConfiguration =
+            !serverUrl.isNullOrBlank() &&
+                !deviceCode.isNullOrBlank() &&
+                !activationToken.isNullOrBlank()
+
+        val hasDeviceActivation = !deviceToken.isNullOrBlank()
+
+        // Do not treat a saved token as proof of a live connection.
+        val checkIsFresh =
+            lastCheckAt > 0L &&
+                now >= lastCheckAt &&
+                now - lastCheckAt <= STATUS_FRESHNESS_MS
+
+        val serverStatus = when {
+            !hasServerConfiguration -> {
+                "NOT ACTIVATED"
+            }
+
+            !hasDeviceActivation -> {
+                "NOT ACTIVATED"
+            }
+
+            serviceRunning &&
+                checkIsFresh &&
+                serverState.equals(
+                    SERVER_STATE_CONNECTED,
+                    ignoreCase = true
+                ) -> {
+                "ACTIVATED"
+            }
+
+            serviceRunning &&
+                checkIsFresh &&
+                serverState.equals(
+                    SERVER_STATE_FAILED,
+                    ignoreCase = true
+                ) -> {
+                "CONNECTION FAILED"
+            }
+
+            serviceRunning -> {
+                "CONNECTING"
+            }
+
+            checkIsFresh &&
+                serverState.equals(
+                    SERVER_STATE_FAILED,
+                    ignoreCase = true
+                ) -> {
+                "CONNECTION FAILED"
+            }
+
+            else -> {
+                "CONNECTING"
+            }
+        }
 
         serverText.text =
             "Server: ${serverUrl ?: "Not configured"}"
@@ -814,22 +1007,34 @@ class MainActivity : Activity() {
                 }
             )
 
+            appendLine("Server Status: $serverStatus")
+
+            if (lastCheckAt > 0L) {
+                appendLine(
+                    "Last server check: " +
+                        android.text.format.DateFormat.format(
+                            "dd MMM yyyy, hh:mm:ss a",
+                            lastCheckAt
+                        )
+                )
+            } else {
+                appendLine("Last server check: Not available yet")
+            }
+
             if (message != null) {
                 appendLine()
                 append(message)
             }
         }
 
+        // Dashboard SERVER card
         val serverValue = content.findViewWithTag<TextView>(
             "value_SERVER"
         )
 
-        serverValue?.text = when {
-            serverUrl.isNullOrBlank() -> "NOT SET"
-            deviceToken.isNullOrBlank() -> "NOT ACTIVATED"
-            else -> "ACTIVATED"
-        }
+        serverValue?.text = serverStatus
 
+        // Dashboard permission card
         val permissionValue = content.findViewWithTag<TextView>(
             "value_SMS_PERMISSION"
         )
@@ -842,10 +1047,10 @@ class MainActivity : Activity() {
 
         gatewayText.text = buildString {
             appendLine(
-                if (gatewayStartRequested) {
-                    "Gateway start has been requested."
+                if (serviceRunning || gatewayStartRequested) {
+                    "Gateway service is running or starting."
                 } else {
-                    "Gateway service controls"
+                    "Gateway service is stopped."
                 }
             )
 
@@ -865,19 +1070,24 @@ class MainActivity : Activity() {
                 }
             )
 
-            append(
+            appendLine(
                 when {
                     deviceCode.isNullOrBlank() ||
-                        activationToken.isNullOrBlank() ->
+                        activationToken.isNullOrBlank() -> {
                         "Device Code and Activation Token are not configured."
+                    }
 
-                    deviceToken.isNullOrBlank() ->
+                    deviceToken.isNullOrBlank() -> {
                         "Device is not activated. Activate it in Gateway Settings."
+                    }
 
-                    else ->
-                        "Device activation token is available."
+                    else -> {
+                        "Device activation token is saved."
+                    }
                 }
             )
+
+            append("Server connection: $serverStatus")
         }
     }
 
@@ -894,5 +1104,30 @@ class MainActivity : Activity() {
 
     companion object {
         private const val PERMISSION_REQUEST_CODE = 1001
+
+        // These names must match the values written by GatewayService.kt.
+        private const val SERVER_STATUS_PREFS =
+            "ss_mediaos_gateway_status"
+
+        private const val PREF_SERVICE_RUNNING =
+            "service_running"
+
+        private const val PREF_SERVER_STATE =
+            "server_state"
+
+        private const val PREF_SERVER_CHECK_AT =
+            "server_check_at"
+
+        private const val SERVER_STATE_CONNECTED =
+            "CONNECTED"
+
+        private const val SERVER_STATE_FAILED =
+            "FAILED"
+
+        private const val SERVER_STATE_CONNECTING =
+            "CONNECTING"
+
+        // A server check older than 30 seconds is considered stale.
+        private const val STATUS_FRESHNESS_MS = 30_000L
     }
 }
