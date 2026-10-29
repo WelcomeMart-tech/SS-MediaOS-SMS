@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- Network access -->
+    <!-- Secure server/API communication -->
     <uses-permission android:name="android.permission.INTERNET" />
 
-    <!-- Send SMS only; do not read incoming or personal SMS -->
+    <!-- Sending SMS only -->
     <uses-permission android:name="android.permission.SEND_SMS" />
 
     <!-- Notifications on Android 13+ -->
@@ -13,9 +13,14 @@
     <!-- Foreground service -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
 
-    <!-- Required when targeting Android 14+ and using dataSync FGS type -->
+    <!-- Foreground service type: dataSync -->
     <uses-permission
         android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+
+    <!-- Telephony is useful but not required for installation -->
+    <uses-feature
+        android:name="android.hardware.telephony"
+        android:required="false" />
 
     <application
         android:name=".GatewayApplication"
@@ -45,14 +50,14 @@
             android:label="Gateway Settings"
             android:exported="false" />
 
-        <!-- Gateway Foreground Service -->
+        <!-- Gateway foreground service -->
         <service
             android:name=".GatewayService"
             android:exported="false"
             android:stopWithTask="false"
             android:foregroundServiceType="dataSync" />
 
-        <!-- SMS Sent Receiver -->
+        <!-- Receives callbacks for SMS send results -->
         <receiver
             android:name=".SmsSentReceiver"
             android:exported="false" />
