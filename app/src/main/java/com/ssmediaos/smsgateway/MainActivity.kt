@@ -11,8 +11,10 @@ import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.Bundle
 import android.view.Gravity
+import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -25,6 +27,13 @@ class MainActivity : Activity() {
     private lateinit var permissionText: TextView
     private lateinit var gatewayText: TextView
     private lateinit var content: LinearLayout
+    private lateinit var dashboardScroll: ScrollView
+    private lateinit var rootFrame: FrameLayout
+    private lateinit var pageContainer: LinearLayout
+    private var drawerOverlay: FrameLayout? = null
+    private lateinit var sentCountText: TextView
+    private lateinit var failedCountText: TextView
+    private lateinit var receivedCountText: TextView
 
     private var gatewayStartRequested = false
 
@@ -53,16 +62,61 @@ class MainActivity : Activity() {
 
         if (::statusText.isInitialized) {
             updateStatus()
+            refreshSmsStats()
         }
     }
 
     private fun createInterface() {
-        val root = LinearLayout(this).apply {
+        // One shared app shell owns the navigation drawer. Individual sections
+        // only render content; they must not create their own duplicate menus.
+        rootFrame = FrameLayout(this).apply {
+            setBackgroundColor(backgroundColor)
+        }
+        pageContainer = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(backgroundColor)
         }
 
-        val scrollView = ScrollView(this).apply {
+        // Compact app bar with a working navigation menu.
+        val appBar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(16), dp(10), dp(16), dp(10))
+            setBackgroundColor(white)
+            elevation = dp(3).toFloat()
+        }
+
+        val menuButton = TextView(this).apply {
+            text = "☰"
+            textSize = 27f
+            setTextColor(navy)
+            gravity = Gravity.CENTER
+            contentDescription = "Open navigation menu"
+            setPadding(dp(8), dp(4), dp(14), dp(4))
+            setOnClickListener { showNavigationMenu(this) }
+        }
+        appBar.addView(menuButton, LinearLayout.LayoutParams(dp(48), dp(48)))
+
+        val appBarTitle = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+        appBarTitle.addView(textView("SS MediaOS", 17f, navy, true))
+        appBarTitle.addView(textView("SMS GATEWAY", 10f, textMuted, true))
+        appBar.addView(appBarTitle, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+
+        val appBarStatus = TextView(this).apply {
+            text = "●"
+            textSize = 18f
+            setTextColor(green)
+            contentDescription = "Application running"
+        }
+        appBar.addView(appBarStatus)
+
+        pageContainer.addView(appBar, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        ))
+
+        dashboardScroll = ScrollView(this).apply {
             isFillViewport = true
             clipToPadding = false
             setPadding(0, 0, 0, dp(16))
@@ -171,60 +225,6 @@ class MainActivity : Activity() {
             }
         )
 
-        // Verified Organization Details — values come only from SecureConfig
-        content.addView(
-            sectionTitle(
-                "Organization Details",
-                "Verified organization linked to this gateway"
-            )
-        )
-
-        val organizationCard = createCard()
-        organizationCard.addView(
-            textView(
-                "Organization Name: ${SecureConfig.getOrganizationName(this).ifBlank { "Not verified" }}",
-                14f, textDark, true
-            )
-        )
-        organizationCard.addView(
-            textView(
-                "Organization ID: ${SecureConfig.getOrganizationId(this).ifBlank { "—" }}",
-                13f, textMuted, false
-            ).apply { setPadding(0, dp(10), 0, 0) }
-        )
-        organizationCard.addView(
-            textView(
-                "Organization Code: ${SecureConfig.getOrganizationCode(this).ifBlank { "—" }}",
-                13f, textMuted, false
-            ).apply { setPadding(0, dp(10), 0, 0) }
-        )
-        organizationCard.addView(
-            textView(
-                "Registered Mobile Number: ${SecureConfig.getRegisteredMobile(this).ifBlank { "—" }}",
-                13f, textMuted, false
-            ).apply { setPadding(0, dp(10), 0, 0) }
-        )
-        val organizationVerified = SecureConfig.isOrganizationVerified(this)
-        organizationCard.addView(
-            textView(
-                "Organization Status: ${if (organizationVerified) "Active — Verified" else "Not Verified"}",
-                13f, if (organizationVerified) green else Color.rgb(185, 28, 28), true
-            ).apply { setPadding(0, dp(10), 0, 0) }
-        )
-        organizationCard.addView(
-            actionButton("↻   Refresh Organization Details", blue) {
-                updateStatus("Organization details refreshed from locally saved verified data.")
-                recreate()
-            }, buttonLayout()
-        )
-        content.addView(
-            organizationCard,
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { bottomMargin = dp(22) }
-        )
-
         // Dashboard
         content.addView(
             sectionTitle(
@@ -276,6 +276,25 @@ class MainActivity : Activity() {
             }
         )
 
+        // SMS activity summary. Counts are recorded from Android send callbacks.
+        content.addView(sectionTitle("SMS Activity", "Live counters recorded on this device"))
+
+        val smsStatsRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+        }
+        val sentCard = createStatCard("SMS SENT", "0", "Submitted by device", green)
+        val failedCard = createStatCard("SMS FAILED", "0", "Send errors", Color.rgb(220, 53, 69))
+        val receivedCard = createStatCard("SMS RECEIVED", "—", "Incoming inbox not collected", blue)
+        sentCountText = sentCard.getChildAt(1) as TextView
+        failedCountText = failedCard.getChildAt(1) as TextView
+        receivedCountText = receivedCard.getChildAt(1) as TextView
+        smsStatsRow.addView(sentCard, LinearLayout.LayoutParams(0, dp(112), 1f).apply { marginEnd = dp(5) })
+        smsStatsRow.addView(failedCard, LinearLayout.LayoutParams(0, dp(112), 1f).apply { marginStart = dp(5); marginEnd = dp(5) })
+        smsStatsRow.addView(receivedCard, LinearLayout.LayoutParams(0, dp(112), 1f).apply { marginStart = dp(5) })
+        content.addView(smsStatsRow, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        ).apply { bottomMargin = dp(18) })
+
         val permissionCard = createStatCard(
             "SMS PERMISSION",
             "CHECKING",
@@ -298,7 +317,7 @@ class MainActivity : Activity() {
             sectionTitle(
                 "Gateway Controls",
                 "Manage your SMS gateway"
-            )
+            ).apply { tag = "nav_gateway" }
         )
 
         val gatewayCard = createCard()
@@ -348,7 +367,7 @@ class MainActivity : Activity() {
             sectionTitle(
                 "SMS Services",
                 "Access your SMS tools"
-            )
+            ).apply { tag = "nav_sms" }
         )
 
         val smsCard = createCard()
@@ -389,7 +408,7 @@ class MainActivity : Activity() {
             sectionTitle(
                 "Gateway Settings",
                 "Configure your server and device"
-            )
+            ).apply { tag = "nav_settings" }
         )
 
         val settingsCard = createCard()
@@ -440,7 +459,7 @@ class MainActivity : Activity() {
             sectionTitle(
                 "System Information",
                 "Current device status"
-            )
+            ).apply { tag = "nav_system" }
         )
 
         val systemCard = createCard()
@@ -512,7 +531,7 @@ class MainActivity : Activity() {
             sectionTitle(
                 "Privacy & Messaging Policies",
                 "Clear rules for data protection and responsible SMS use"
-            )
+            ).apply { tag = "nav_policies" }
         )
 
         val policyCard = createCard()
@@ -576,7 +595,7 @@ class MainActivity : Activity() {
 
         content.addView(footer)
 
-        scrollView.addView(
+        dashboardScroll.addView(
             content,
             ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -584,8 +603,8 @@ class MainActivity : Activity() {
             )
         )
 
-        root.addView(
-            scrollView,
+        pageContainer.addView(
+            dashboardScroll,
             LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 0,
@@ -593,7 +612,194 @@ class MainActivity : Activity() {
             )
         )
 
-        setContentView(root)
+        rootFrame.addView(
+            pageContainer,
+            FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
+        )
+        buildSharedNavigationDrawer()
+        setContentView(rootFrame)
+        refreshSmsStats()
+    }
+
+    /**
+     * Creates exactly one navigation drawer for the whole Activity.
+     * Dashboard sections never create their own menu or duplicate sidebar.
+     */
+    private fun buildSharedNavigationDrawer() {
+        val overlay = FrameLayout(this).apply {
+            visibility = View.GONE
+            setBackgroundColor(Color.TRANSPARENT)
+            isClickable = true
+            isFocusable = true
+        }
+
+        val scrim = View(this).apply {
+            setBackgroundColor(0x990B1730.toInt())
+            setOnClickListener { closeNavigationMenu() }
+        }
+        overlay.addView(
+            scrim,
+            FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
+        )
+
+        val drawer = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(white)
+            elevation = dp(18).toFloat()
+            isClickable = true
+            setPadding(0, 0, 0, dp(12))
+        }
+
+        val drawerHeader = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(22), dp(30), dp(18), dp(24))
+            background = roundedGradient(
+                intArrayOf(Color.rgb(16, 27, 53), Color.rgb(24, 119, 242)), 0
+            )
+        }
+        drawerHeader.addView(textView("SS MediaOS", 22f, white, true))
+        drawerHeader.addView(
+            textView("SMS GATEWAY", 11f, Color.rgb(219, 234, 254), true).apply {
+                setPadding(0, dp(5), 0, 0)
+                letterSpacing = 0.14f
+            }
+        )
+        drawerHeader.addView(
+            textView("Secure Organization Messaging", 12f, Color.rgb(230, 239, 255), false).apply {
+                setPadding(0, dp(13), 0, 0)
+            }
+        )
+        drawer.addView(drawerHeader)
+
+        val menuScroll = ScrollView(this).apply {
+            isFillViewport = false
+            overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
+        }
+        val menuItems = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(12), dp(16), dp(12), dp(12))
+        }
+        menuScroll.addView(menuItems)
+
+        fun addDrawerItem(label: String, icon: String, action: () -> Unit, enabled: Boolean = true) {
+            val item = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(14), 0, dp(12), 0)
+                background = roundedBackground(
+                    if (enabled) Color.rgb(247, 249, 253) else Color.rgb(250, 250, 250), 12
+                )
+                alpha = if (enabled) 1f else 0.58f
+                isClickable = true
+                isFocusable = true
+                minimumHeight = dp(50)
+                setOnClickListener {
+                    closeNavigationMenu()
+                    action()
+                }
+            }
+            item.addView(textView(icon, 18f, blue, true), LinearLayout.LayoutParams(dp(34), dp(48)))
+            item.addView(
+                textView(label, 14f, textDark, true),
+                LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            )
+            if (!enabled) {
+                item.addView(textView("Soon", 10f, textMuted, false))
+            }
+            menuItems.addView(item, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(50)
+            ).apply { bottomMargin = dp(7) })
+        }
+
+        addDrawerItem("Dashboard", "⌂", {
+            dashboardScroll.smoothScrollTo(0, 0)
+        })
+        addDrawerItem("SMS Logs", "▤", {
+            showToast("SMS Logs screen is not available in this app build yet.")
+        }, enabled = false)
+        addDrawerItem("Reports & Analytics", "▥", {
+            showToast("Reports & Analytics screen is not available in this app build yet.")
+        }, enabled = false)
+        addDrawerItem("Permissions & Roles", "♙", {
+            showToast("Permissions & Roles are managed by the connected organization server.")
+        }, enabled = false)
+        addDrawerItem("Gateway Device", "▣", {
+            openGatewaySettings()
+        })
+        addDrawerItem("Settings", "⚙", {
+            openGatewaySettings()
+        })
+        addDrawerItem("About", "ⓘ", {
+            showPolicyDialog(
+                "About SS MediaOS SMS Gateway",
+                "SS MediaOS SMS Gateway\nSecure, organization-linked SMS delivery through an authorized device and selected active SIM.\n\nThe app processes server-authorized jobs only."
+            )
+        })
+
+        val spacer = View(this)
+        menuItems.addView(spacer, LinearLayout.LayoutParams(1, dp(8)))
+        addDrawerItem("Logout", "⇥", {
+            AlertDialog.Builder(this)
+                .setTitle("Logout")
+                .setMessage("This app build does not have a server logout endpoint. To avoid clearing device credentials incorrectly, no local logout was performed.")
+                .setNegativeButton("Close", null)
+                .show()
+        })
+
+        drawer.addView(
+            menuScroll,
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
+        )
+        overlay.addView(
+            drawer,
+            FrameLayout.LayoutParams(dp(304), ViewGroup.LayoutParams.MATCH_PARENT, Gravity.START)
+        )
+        rootFrame.addView(
+            overlay,
+            FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
+        )
+        drawerOverlay = overlay
+    }
+
+    private fun showNavigationMenu(anchor: View) {
+        drawerOverlay?.visibility = View.VISIBLE
+    }
+
+    private fun closeNavigationMenu() {
+        drawerOverlay?.visibility = View.GONE
+    }
+
+    override fun onBackPressed() {
+        if (drawerOverlay?.visibility == View.VISIBLE) {
+            closeNavigationMenu()
+        } else {
+            super.onBackPressed()
+        }
+    }
+
+    private fun scrollToSection(tagName: String) {
+        val target = content.findViewWithTag<View>(tagName) ?: return
+        dashboardScroll.post {
+            dashboardScroll.smoothScrollTo(0, target.top)
+        }
+    }
+
+    private fun refreshSmsStats() {
+        if (!::sentCountText.isInitialized) return
+        val stats = getSharedPreferences("ss_mediaos_sms_stats", MODE_PRIVATE)
+        sentCountText.text = stats.getInt("sent_count", 0).toString()
+        failedCountText.text = stats.getInt("failed_count", 0).toString()
+        // Incoming SMS inbox access is intentionally disabled in this app.
+        receivedCountText.text = "—"
     }
 
     private fun showPolicyDialog(title: String, body: String) {
@@ -838,17 +1044,6 @@ These are safety/compliance principles, not a substitute for checking the latest
     }
 
     private fun startGatewayService() {
-        if (!SecureConfig.isOrganizationVerified(this)) {
-            showToast("Verify an active organization before starting the gateway.")
-            openGatewaySettings()
-            return
-        }
-        if (SecureConfig.getSelectedSimSubscriptionId(this) == null) {
-            showToast("Select the assigned SIM before starting the gateway.")
-            openGatewaySettings()
-            return
-        }
-
         val smsGranted =
             checkSelfPermission(Manifest.permission.SEND_SMS) ==
                 PackageManager.PERMISSION_GRANTED
