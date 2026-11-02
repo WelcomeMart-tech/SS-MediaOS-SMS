@@ -1,4 +1,3 @@
-
 package com.ssmediaos.smsgateway
 
 import android.Manifest
@@ -15,7 +14,6 @@ import android.view.Gravity
 import android.view.ViewGroup
 import android.widget.Button
 import android.widget.LinearLayout
-import android.widget.PopupMenu
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
@@ -27,7 +25,6 @@ class MainActivity : Activity() {
     private lateinit var permissionText: TextView
     private lateinit var gatewayText: TextView
     private lateinit var content: LinearLayout
-    private lateinit var mainScroll: ScrollView
 
     private var gatewayStartRequested = false
 
@@ -65,81 +62,29 @@ class MainActivity : Activity() {
             setBackgroundColor(backgroundColor)
         }
 
-        val appBar = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(16), dp(10), dp(16), dp(10))
-            setBackgroundColor(navy)
-        }
-
-        val menuButton = Button(this).apply {
-            text = "☰"
-            textSize = 22f
-            isAllCaps = false
-            setTextColor(white)
-            background = roundedBackground(Color.rgb(35, 52, 83), 12)
-            contentDescription = "Open navigation menu"
-            setPadding(dp(8), 0, dp(8), 0)
-        }
-
-        appBar.addView(menuButton, LinearLayout.LayoutParams(dp(48), dp(46)))
-
-        val appBarTitle = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(12), 0, 0, 0)
-        }
-
-        appBarTitle.addView(textView("SS MediaOS", 18f, white, true))
-        appBarTitle.addView(
-            textView("SMS GATEWAY", 10f, Color.rgb(190, 211, 245), true)
-        )
-
-        appBar.addView(
-            appBarTitle,
-            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-        )
-
-        val appBarStatus = TextView(this).apply {
-            text = "●"
-            textSize = 17f
-            setTextColor(Color.rgb(34, 197, 94))
-            gravity = Gravity.CENTER
-            contentDescription = "Application running"
-        }
-
-        appBar.addView(appBarStatus, LinearLayout.LayoutParams(dp(28), dp(40)))
-
-        root.addView(
-            appBar,
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            )
-        )
-
-        mainScroll = ScrollView(this).apply {
+        val scrollView = ScrollView(this).apply {
             isFillViewport = true
             clipToPadding = false
-            setPadding(0, 0, 0, dp(18))
-            setBackgroundColor(backgroundColor)
+            setPadding(0, 0, 0, dp(16))
         }
 
         content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(16), dp(16), dp(16), dp(28))
+            setPadding(dp(16), dp(16), dp(16), dp(24))
         }
 
-        // Brand panel
+        // Brand header
         val header = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), dp(20), dp(20), dp(20))
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(20), dp(24), dp(20), dp(22))
             background = roundedGradient(
                 intArrayOf(
                     Color.rgb(16, 27, 53),
                     Color.rgb(23, 59, 112),
                     Color.rgb(24, 119, 242)
                 ),
-                22
+                24
             )
             elevation = dp(4).toFloat()
         }
@@ -150,42 +95,69 @@ class MainActivity : Activity() {
         }
 
         val logo = TextView(this).apply {
-            text = "SS"
-            textSize = 22f
+            text = "SMS"
+            textSize = 19f
             gravity = Gravity.CENTER
             setTextColor(white)
             setTypeface(null, Typeface.BOLD)
-            background = roundedBackground(Color.rgb(35, 87, 157), 16)
-            contentDescription = "SS MediaOS logo"
+            background = roundedBackground(
+                Color.rgb(36, 87, 157),
+                18
+            )
+            contentDescription = "SS MediaOS SMS Gateway logo"
         }
 
-        brandRow.addView(logo, LinearLayout.LayoutParams(dp(58), dp(58)))
+        brandRow.addView(
+            logo,
+            LinearLayout.LayoutParams(dp(66), dp(66))
+        )
 
         val brandText = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(13), 0, 0, 0)
+            setPadding(dp(14), 0, 0, 0)
         }
 
-        brandText.addView(textView("SMS Gateway", 21f, white, true))
         brandText.addView(
-            textView("Secure device messaging", 12f, Color.rgb(210, 226, 250), false)
+            textView("SS MediaOS", 22f, white, true)
+        )
+
+        brandText.addView(
+            textView(
+                "SMS GATEWAY",
+                12f,
+                Color.rgb(207, 226, 255),
+                true
+            ).apply {
+                letterSpacing = 0.12f
+                setPadding(0, dp(5), 0, 0)
+            }
         )
 
         brandRow.addView(
             brandText,
-            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            LinearLayout.LayoutParams(
+                0,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                1f
+            )
         )
 
         header.addView(brandRow)
 
         header.addView(
             textView(
-                "Manage your gateway, device connection and messaging activity.",
+                "Smart messaging. Reliable connectivity.",
                 13f,
                 Color.rgb(230, 239, 255),
                 false
             ).apply {
-                setPadding(0, dp(15), 0, 0)
+                setPadding(0, dp(18), 0, 0)
+            }
+        )
+
+        header.addView(
+            textView("Owner: SS MediaOS", 12f, white, true).apply {
+                setPadding(0, dp(16), 0, 0)
             }
         )
 
@@ -195,174 +167,139 @@ class MainActivity : Activity() {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
             ).apply {
-                bottomMargin = dp(20)
+                bottomMargin = dp(22)
             }
         )
 
-        // Dashboard
-        val dashboardAnchor = sectionTitle("Dashboard", "Live gateway overview")
-        dashboardAnchor.tag = "nav_dashboard"
-        content.addView(dashboardAnchor)
-
-        val statsRow1 = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-        }
-
-        statsRow1.addView(
-            createStatCard("SMS SENT", "—", "Submitted by device", blue),
-            LinearLayout.LayoutParams(0, dp(112), 1f).apply {
-                marginEnd = dp(6)
-            }
-        )
-
-        statsRow1.addView(
-            createStatCard(
-                "SMS FAILED",
-                "—",
-                "Send failures",
-                Color.rgb(220, 70, 75)
-            ),
-            LinearLayout.LayoutParams(0, dp(112), 1f).apply {
-                marginStart = dp(6)
-            }
-        )
-
+        // Verified Organization Details — values come only from SecureConfig
         content.addView(
-            statsRow1,
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply {
-                bottomMargin = dp(12)
-            }
-        )
-
-        val statsRow2 = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-        }
-
-        statsRow2.addView(
-            createStatCard(
-                "SMS RECEIVED",
-                "—",
-                "Not collected by this app",
-                Color.rgb(15, 118, 110)
-            ),
-            LinearLayout.LayoutParams(0, dp(104), 1f).apply {
-                marginEnd = dp(6)
-            }
-        )
-
-        statsRow2.addView(
-            createStatCard(
-                "SMS PERMISSION",
-                "CHECKING",
-                "Android permission",
-                blue
-            ),
-            LinearLayout.LayoutParams(0, dp(104), 1f).apply {
-                marginStart = dp(6)
-            }
-        )
-
-        content.addView(
-            statsRow2,
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply {
-                bottomMargin = dp(20)
-            }
-        )
-
-        // Organization details
-        content.addView(
-            sectionTitle("Organization", "Verified account information")
-        )
-
-        val organizationCard = createCard()
-
-        val orgPrefs = getSharedPreferences(
-            "ss_mediaos_gateway_status",
-            MODE_PRIVATE
-        )
-
-        val orgName = orgPrefs.getString("organization_name", "").orEmpty()
-        val orgCode = orgPrefs.getString("organization_code", "").orEmpty()
-        val orgMobile = orgPrefs.getString("registered_mobile", "").orEmpty()
-        val orgCompany = orgPrefs.getString("company_name", "").orEmpty()
-        val orgId = orgPrefs.getString("company_id", "").orEmpty()
-
-        organizationCard.addView(
-            textView(
-                "Organization: ${orgName.ifBlank { "Not verified" }}",
-                14f,
-                textDark,
-                true
+            sectionTitle(
+                "Organization Details",
+                "Verified organization linked to this gateway"
             )
         )
 
+        val organizationCard = createCard()
         organizationCard.addView(
             textView(
-                "Institution Code: ${orgCode.ifBlank { "—" }}",
-                13f,
-                textMuted,
-                false
-            ).apply {
-                setPadding(0, dp(9), 0, 0)
-            }
+                "Organization Name: ${SecureConfig.getOrganizationName(this).ifBlank { "Not verified" }}",
+                14f, textDark, true
+            )
         )
-
         organizationCard.addView(
             textView(
-                "Mobile Number: ${orgMobile.ifBlank { "—" }}",
-                13f,
-                textMuted,
-                false
-            ).apply {
-                setPadding(0, dp(7), 0, 0)
-            }
+                "Organization ID: ${SecureConfig.getOrganizationId(this).ifBlank { "—" }}",
+                13f, textMuted, false
+            ).apply { setPadding(0, dp(10), 0, 0) }
         )
-
         organizationCard.addView(
             textView(
-                "Company: ${orgCompany.ifBlank { "—" }}",
-                13f,
-                textMuted,
-                false
-            ).apply {
-                setPadding(0, dp(7), 0, 0)
-            }
+                "Organization Code: ${SecureConfig.getOrganizationCode(this).ifBlank { "—" }}",
+                13f, textMuted, false
+            ).apply { setPadding(0, dp(10), 0, 0) }
         )
-
         organizationCard.addView(
             textView(
-                "Company ID: ${orgId.ifBlank { "—" }}",
-                13f,
-                textMuted,
-                false
-            ).apply {
-                setPadding(0, dp(7), 0, 0)
-            }
+                "Registered Mobile Number: ${SecureConfig.getRegisteredMobile(this).ifBlank { "—" }}",
+                13f, textMuted, false
+            ).apply { setPadding(0, dp(10), 0, 0) }
         )
-
+        val organizationVerified = SecureConfig.isOrganizationVerified(this)
+        organizationCard.addView(
+            textView(
+                "Organization Status: ${if (organizationVerified) "Active — Verified" else "Not Verified"}",
+                13f, if (organizationVerified) green else Color.rgb(185, 28, 28), true
+            ).apply { setPadding(0, dp(10), 0, 0) }
+        )
+        organizationCard.addView(
+            actionButton("↻   Refresh Organization Details", blue) {
+                updateStatus("Organization details refreshed from locally saved verified data.")
+                recreate()
+            }, buttonLayout()
+        )
         content.addView(
             organizationCard,
             LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = dp(22) }
+        )
+
+        // Dashboard
+        content.addView(
+            sectionTitle(
+                "Dashboard",
+                "Gateway overview and controls"
+            )
+        )
+
+        // Status cards
+        val statusRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+        }
+
+        val appCard = createStatCard(
+            "APP STATUS",
+            "RUNNING",
+            "Application",
+            green
+        )
+
+        val connectionCard = createStatCard(
+            "SERVER",
+            "CHECKING",
+            "Live connection status",
+            blue
+        )
+
+        statusRow.addView(
+            appCard,
+            LinearLayout.LayoutParams(0, dp(120), 1f).apply {
+                marginEnd = dp(7)
+            }
+        )
+
+        statusRow.addView(
+            connectionCard,
+            LinearLayout.LayoutParams(0, dp(120), 1f).apply {
+                marginStart = dp(7)
+            }
+        )
+
+        content.addView(
+            statusRow,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
             ).apply {
-                bottomMargin = dp(20)
+                bottomMargin = dp(14)
+            }
+        )
+
+        val permissionCard = createStatCard(
+            "SMS PERMISSION",
+            "CHECKING",
+            "Android permission",
+            blue
+        )
+
+        content.addView(
+            permissionCard,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(112)
+            ).apply {
+                bottomMargin = dp(22)
             }
         )
 
         // Gateway controls
-        val gatewayTitle = sectionTitle(
-            "Gateway Controls",
-            "Start, stop and monitor the service"
+        content.addView(
+            sectionTitle(
+                "Gateway Controls",
+                "Manage your SMS gateway"
+            )
         )
-        gatewayTitle.tag = "nav_gateway"
-        content.addView(gatewayTitle)
 
         val gatewayCard = createCard()
 
@@ -377,14 +314,20 @@ class MainActivity : Activity() {
         gatewayCard.addView(gatewayText)
 
         gatewayCard.addView(
-            actionButton("▶  Start Gateway Service", green) {
+            actionButton(
+                "▶   Start Gateway Service",
+                green
+            ) {
                 startGatewayService()
             },
             buttonLayout()
         )
 
         gatewayCard.addView(
-            actionButton("■  Stop Gateway Service", Color.rgb(220, 53, 69)) {
+            actionButton(
+                "■   Stop Gateway Service",
+                Color.rgb(220, 53, 69)
+            ) {
                 stopGatewayService()
             },
             buttonLayout()
@@ -396,29 +339,38 @@ class MainActivity : Activity() {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
             ).apply {
-                bottomMargin = dp(20)
+                bottomMargin = dp(22)
             }
         )
 
         // SMS services
-        val smsTitle = sectionTitle(
-            "SMS Services",
-            "Messaging tools and activity"
+        content.addView(
+            sectionTitle(
+                "SMS Services",
+                "Access your SMS tools"
+            )
         )
-        smsTitle.tag = "nav_sms"
-        content.addView(smsTitle)
 
         val smsCard = createCard()
-        smsCard.addView(textView("SMS Gateway", 17f, textDark, true))
 
         smsCard.addView(
             textView(
-                "The gateway sends only authorized messages received from the configured server. Sent and failed totals will appear when the device callback counters are connected.",
+                "SMS Gateway",
+                17f,
+                textDark,
+                true
+            )
+        )
+
+        smsCard.addView(
+            textView(
+                "Use the authorized gateway to send business messages. " +
+                    "This app does not access your incoming SMS inbox.",
                 13f,
                 textMuted,
                 false
             ).apply {
-                setPadding(0, dp(7), 0, dp(12))
+                setPadding(0, dp(6), 0, dp(12))
             }
         )
 
@@ -428,19 +380,20 @@ class MainActivity : Activity() {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
             ).apply {
-                bottomMargin = dp(20)
+                bottomMargin = dp(22)
             }
         )
 
-        // Settings
-        val settingsTitle = sectionTitle(
-            "Gateway Settings",
-            "Server, device and activation"
+        // Gateway settings
+        content.addView(
+            sectionTitle(
+                "Gateway Settings",
+                "Configure your server and device"
+            )
         )
-        settingsTitle.tag = "nav_settings"
-        content.addView(settingsTitle)
 
         val settingsCard = createCard()
+
         settingsCard.addView(
             textView(
                 "Server URL, Device Code and Activation Token",
@@ -452,7 +405,8 @@ class MainActivity : Activity() {
 
         settingsCard.addView(
             textView(
-                "Configure the SS MediaOS server and verify your organization and registered mobile number before activating this device.",
+                "Configure the SS MediaOS server and activate this device " +
+                    "before sending SMS.",
                 13f,
                 textMuted,
                 false
@@ -462,7 +416,10 @@ class MainActivity : Activity() {
         )
 
         settingsCard.addView(
-            actionButton("⚙  Open Gateway Settings", blue) {
+            actionButton(
+                "⚙   Open Gateway Settings",
+                blue
+            ) {
                 openGatewaySettings()
             },
             buttonLayout()
@@ -474,17 +431,17 @@ class MainActivity : Activity() {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
             ).apply {
-                bottomMargin = dp(20)
+                bottomMargin = dp(22)
             }
         )
 
         // System information
-        val systemTitle = sectionTitle(
-            "System Information",
-            "Permission and server connection"
+        content.addView(
+            sectionTitle(
+                "System Information",
+                "Current device status"
+            )
         )
-        systemTitle.tag = "nav_system"
-        content.addView(systemTitle)
 
         val systemCard = createCard()
 
@@ -510,26 +467,33 @@ class MainActivity : Activity() {
         )
 
         systemCard.addView(serverText)
+
         systemCard.addView(
             permissionText.apply {
-                setPadding(0, dp(10), 0, 0)
-            }
-        )
-        systemCard.addView(
-            statusText.apply {
-                setPadding(0, dp(10), 0, 0)
+                setPadding(0, dp(12), 0, 0)
             }
         )
 
         systemCard.addView(
-            actionButton("↻  Refresh Status", blue) {
+            statusText.apply {
+                setPadding(0, dp(12), 0, 0)
+            }
+        )
+
+        systemCard.addView(
+            actionButton(
+                "↻   Refresh Status",
+                blue
+            ) {
                 updateStatus("Status refreshed.")
+            }.apply {
+                setPadding(dp(12), 0, dp(12), 0)
             },
             LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 dp(48)
             ).apply {
-                topMargin = dp(16)
+                topMargin = dp(18)
             }
         )
 
@@ -539,76 +503,80 @@ class MainActivity : Activity() {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
             ).apply {
-                bottomMargin = dp(20)
+                bottomMargin = dp(22)
             }
         )
 
-        // Privacy and policies
-        val policyTitle = sectionTitle(
-            "Privacy & Messaging Policies",
-            "Responsible SMS and data handling"
+        // Legal, privacy and responsible-messaging policies
+        content.addView(
+            sectionTitle(
+                "Privacy & Messaging Policies",
+                "Clear rules for data protection and responsible SMS use"
+            )
         )
-        policyTitle.tag = "nav_policy"
-        content.addView(policyTitle)
 
         val policyCard = createCard()
-
         policyCard.addView(
             textView(
-                "Review the gateway's data handling and responsible messaging rules.",
+                "Please review how this gateway handles device data and SMS requests.",
                 13f,
                 textMuted,
                 false
-            ).apply {
-                setPadding(0, 0, 0, dp(12))
-            }
+            ).apply { setPadding(0, 0, 0, dp(12)) }
         )
-
         policyCard.addView(
-            actionButton("🔒  Privacy Policy", navy) {
+            actionButton("🔒   Privacy Policy", navy) {
                 showPolicyDialog("Privacy Policy", privacyPolicyText())
-            },
-            buttonLayout()
+            }, buttonLayout()
         )
-
         policyCard.addView(
-            actionButton("📡  Telecom & SMS Policy", blue) {
-                showPolicyDialog(
-                    "Telecom & SMS Policy",
-                    telecomSmsPolicyText()
-                )
-            },
-            buttonLayout()
+            actionButton("📡   Telecom & SMS Policy", blue) {
+                showPolicyDialog("Telecom & SMS Policy", telecomSmsPolicyText())
+            }, buttonLayout()
         )
-
         policyCard.addView(
-            actionButton("🛡  DND, Consent & Opt-out Rules", Color.rgb(15, 118, 110)) {
-                showPolicyDialog(
-                    "DND, Consent & Opt-out Rules",
-                    dndPolicyText()
-                )
-            },
-            buttonLayout()
+            actionButton("🛡   DND, Consent & Opt-out Rules", Color.rgb(15, 118, 110)) {
+                showPolicyDialog("DND, Consent & Opt-out Rules", dndPolicyText())
+            }, buttonLayout()
         )
-
         content.addView(
             policyCard,
             LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = dp(22) }
+        )
+
+        // Footer: developer credit intentionally shown only here
+        val footer = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setPadding(dp(10), dp(18), dp(10), dp(12))
+        }
+
+        footer.addView(
+            textView(
+                "SS MediaOS SMS Gateway",
+                14f,
+                navy,
+                true
+            )
+        )
+
+        footer.addView(
+            textView(
+                "Delivered by Shivam Yadav",
+                12f,
+                textMuted,
+                false
             ).apply {
-                bottomMargin = dp(20)
+                setPadding(0, dp(6), 0, 0)
             }
         )
 
-        content.addView(
-            textView("SS MediaOS SMS Gateway", 14f, navy, true).apply {
-                gravity = Gravity.CENTER
-                setPadding(0, dp(18), 0, dp(8))
-            }
-        )
+        content.addView(footer)
 
-        mainScroll.addView(
+        scrollView.addView(
             content,
             ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -617,7 +585,7 @@ class MainActivity : Activity() {
         )
 
         root.addView(
-            mainScroll,
+            scrollView,
             LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 0,
@@ -626,44 +594,6 @@ class MainActivity : Activity() {
         )
 
         setContentView(root)
-
-        // Navigation menu
-        menuButton.setOnClickListener { anchor ->
-            val popup = PopupMenu(this, anchor)
-
-            popup.menu.add("Dashboard")
-            popup.menu.add("Organization Details")
-            popup.menu.add("Gateway Controls")
-            popup.menu.add("SMS Services")
-            popup.menu.add("Gateway Settings")
-            popup.menu.add("System Information")
-            popup.menu.add("Privacy & Policies")
-
-            popup.setOnMenuItemClickListener { item ->
-                val targetTag = when (item.title.toString()) {
-                    "Dashboard" -> "nav_dashboard"
-                    "Organization Details" -> "nav_dashboard"
-                    "Gateway Controls" -> "nav_gateway"
-                    "SMS Services" -> "nav_sms"
-                    "Gateway Settings" -> "nav_settings"
-                    "System Information" -> "nav_system"
-                    else -> "nav_policy"
-                }
-
-                val target =
-                    content.findViewWithTag<android.view.View>(targetTag)
-
-                if (target != null) {
-                    mainScroll.post {
-                        mainScroll.smoothScrollTo(0, target.top)
-                    }
-                }
-
-                true
-            }
-
-            popup.show()
-        }
     }
 
     private fun showPolicyDialog(title: String, body: String) {
@@ -908,6 +838,17 @@ These are safety/compliance principles, not a substitute for checking the latest
     }
 
     private fun startGatewayService() {
+        if (!SecureConfig.isOrganizationVerified(this)) {
+            showToast("Verify an active organization before starting the gateway.")
+            openGatewaySettings()
+            return
+        }
+        if (SecureConfig.getSelectedSimSubscriptionId(this) == null) {
+            showToast("Select the assigned SIM before starting the gateway.")
+            openGatewaySettings()
+            return
+        }
+
         val smsGranted =
             checkSelfPermission(Manifest.permission.SEND_SMS) ==
                 PackageManager.PERMISSION_GRANTED
@@ -933,14 +874,16 @@ These are safety/compliance principles, not a substitute for checking the latest
             )
 
             showToast(
-                "Please save the server URL, Device Code and Activation Token first."
+                "Please save the server URL, Device Code and " +
+                    "Activation Token first."
             )
             return
         }
 
         if (deviceToken.isNullOrBlank()) {
             updateStatus(
-                "This device is not activated yet. Activate it in Gateway Settings."
+                "This device is not activated yet. " +
+                    "Activate it in Gateway Settings."
             )
 
             showToast(
@@ -1009,6 +952,17 @@ These are safety/compliance principles, not a substitute for checking the latest
         }
     }
 
+    /**
+     * SERVER status is based on the latest result recorded by GatewayService.
+     *
+     * A saved device token alone does not mean the server is currently reachable.
+     * GatewayService must write these preferences after its actual polling result:
+     *
+     * ss_mediaos_gateway_status:
+     *   service_running  : Boolean
+     *   server_state     : CONNECTED / FAILED / CONNECTING
+     *   server_check_at  : Long (System.currentTimeMillis())
+     */
     private fun updateStatus(message: String? = null) {
         val smsGranted =
             checkSelfPermission(Manifest.permission.SEND_SMS) ==
@@ -1048,41 +1002,58 @@ These are safety/compliance principles, not a substitute for checking the latest
 
         val hasDeviceActivation = !deviceToken.isNullOrBlank()
 
+        // Do not treat a saved token as proof of a live connection.
         val checkIsFresh =
             lastCheckAt > 0L &&
                 now >= lastCheckAt &&
                 now - lastCheckAt <= STATUS_FRESHNESS_MS
 
         val serverStatus = when {
-            !hasServerConfiguration -> "NOT ACTIVATED"
-            !hasDeviceActivation -> "NOT ACTIVATED"
+            !hasServerConfiguration -> {
+                "NOT ACTIVATED"
+            }
+
+            !hasDeviceActivation -> {
+                "NOT ACTIVATED"
+            }
 
             serviceRunning &&
                 checkIsFresh &&
                 serverState.equals(
                     SERVER_STATE_CONNECTED,
                     ignoreCase = true
-                ) -> "ACTIVATED"
+                ) -> {
+                "ACTIVATED"
+            }
 
             serviceRunning &&
                 checkIsFresh &&
                 serverState.equals(
                     SERVER_STATE_FAILED,
                     ignoreCase = true
-                ) -> "CONNECTION FAILED"
+                ) -> {
+                "CONNECTION FAILED"
+            }
 
-            serviceRunning -> "CONNECTING"
+            serviceRunning -> {
+                "CONNECTING"
+            }
 
             checkIsFresh &&
                 serverState.equals(
                     SERVER_STATE_FAILED,
                     ignoreCase = true
-                ) -> "CONNECTION FAILED"
+                ) -> {
+                "CONNECTION FAILED"
+            }
 
-            else -> "CONNECTING"
+            else -> {
+                "CONNECTING"
+            }
         }
 
-        serverText.text = "Server: ${serverUrl ?: "Not configured"}"
+        serverText.text =
+            "Server: ${serverUrl ?: "Not configured"}"
 
         permissionText.text = if (smsGranted) {
             "SMS Permission: Granted"
@@ -1121,11 +1092,14 @@ These are safety/compliance principles, not a substitute for checking the latest
             }
         }
 
+        // Dashboard SERVER card
         val serverValue = content.findViewWithTag<TextView>(
             "value_SERVER"
         )
+
         serverValue?.text = serverStatus
 
+        // Dashboard permission card
         val permissionValue = content.findViewWithTag<TextView>(
             "value_SMS_PERMISSION"
         )
@@ -1164,13 +1138,17 @@ These are safety/compliance principles, not a substitute for checking the latest
             appendLine(
                 when {
                     deviceCode.isNullOrBlank() ||
-                        activationToken.isNullOrBlank() ->
+                        activationToken.isNullOrBlank() -> {
                         "Device Code and Activation Token are not configured."
+                    }
 
-                    deviceToken.isNullOrBlank() ->
+                    deviceToken.isNullOrBlank() -> {
                         "Device is not activated. Activate it in Gateway Settings."
+                    }
 
-                    else -> "Device activation token is saved."
+                    else -> {
+                        "Device activation token is saved."
+                    }
                 }
             )
 
@@ -1192,6 +1170,7 @@ These are safety/compliance principles, not a substitute for checking the latest
     companion object {
         private const val PERMISSION_REQUEST_CODE = 1001
 
+        // These names must match the values written by GatewayService.kt.
         private const val SERVER_STATUS_PREFS =
             "ss_mediaos_gateway_status"
 
@@ -1213,6 +1192,7 @@ These are safety/compliance principles, not a substitute for checking the latest
         private const val SERVER_STATE_CONNECTING =
             "CONNECTING"
 
+        // A server check older than 30 seconds is considered stale.
         private const val STATUS_FRESHNESS_MS = 30_000L
     }
 }
