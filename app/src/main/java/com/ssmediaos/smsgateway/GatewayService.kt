@@ -471,32 +471,48 @@ class GatewayService : Service() {
      * Validate a claimed server job and submit it to Android.
      */
     private fun processJob(job: JSONObject) {
+        // Validate the server claim first so every identifiable claimed job can
+        // receive a terminal result instead of being silently abandoned.
+        val jobId = job.optLong("id", 0L)
+        val requestId = job.optString("request_id", "").orEmpty().trim()
+        val phoneNumber = job.optString("to", "").orEmpty().trim()
+        val message = job.optString("message", "").orEmpty()
 
-        // Re-check immediately before each SMS job, not only when the service starts.
-        // This prevents queued jobs from sending after verification/SIM settings change.
+        if (
+            jobId <= 0L ||
+            !requestId.matches(Regex("^[a-f0-9]{32}$")) ||
+            phoneNumber.isBlank() ||
+            message.isBlank()
+        ) {
+            Log.e(TAG, "Received invalid SMS job")
+            rejectClaimedJob(jobId, requestId, "INVALID_JOB", "Invalid SMS job received")
+            return
+        }
+
+        // Re-check authorization immediately before every send. If a claimed
+        // job cannot be sent, report a failure to Main Server so it is not left
+        // indefinitely in a claimed/processing state.
         if (!SecureConfig.isOrganizationVerified(this)) {
             Log.w(TAG, "SMS job blocked: organization/mobile is not verified")
-            requestInProgress = false
-            updateStatus("SMS blocked: verify organization and registered mobile")
+            rejectClaimedJob(
+                jobId, requestId, "ORGANIZATION_NOT_VERIFIED",
+                "SMS blocked: verify organization and registered mobile"
+            )
             return
         }
 
         val selectedSubscriptionId = SecureConfig.getSelectedSimSubscriptionId(this)
         if (selectedSubscriptionId == null) {
             Log.w(TAG, "SMS job blocked: no SIM is selected")
-            requestInProgress = false
-            updateStatus("SMS blocked: select an assigned SIM")
+            rejectClaimedJob(
+                jobId, requestId, "SIM_NOT_SELECTED",
+                "SMS blocked: select an assigned SIM"
+            )
             return
         }
 
-        val jobId = job.optLong("id", 0L)
-        val requestId = job.optString("request_id", "").orEmpty().trim()
-        val phoneNumber = job.optString("to", "").orEmpty().trim()
-        val message = job.optString("message", "").orEmpty()
-
-        // Defense-in-depth organization isolation:
-        // every queued job must explicitly identify the organization it belongs to.
-        // Missing or different organization codes are never sent from this device.
+        // Defense-in-depth organization isolation: every queued job must
+        // explicitly identify the verified organization it belongs to.
         val verifiedOrganizationCode = SecureConfig
             .getOrganizationCode(this)
             .trim()
@@ -513,50 +529,11 @@ class GatewayService : Service() {
             jobOrganizationCode.isBlank() ||
             !verifiedOrganizationCode.equals(jobOrganizationCode, ignoreCase = true)
         ) {
-            Log.e(
-                TAG,
-                "SMS job blocked: organization code missing or does not match verified organization"
+            Log.e(TAG, "SMS job blocked: organization code missing or mismatched")
+            rejectClaimedJob(
+                jobId, requestId, "ORGANIZATION_CODE_MISMATCH",
+                "SMS blocked: job does not belong to this verified organization"
             )
-            requestInProgress = false
-            updateStatus("SMS blocked: job does not belong to this verified organization")
-
-            if (
-                jobId > 0L &&
-                requestId.matches(Regex("^[a-f0-9]{32}$"))
-            ) {
-                reportResult(
-                    jobId = jobId,
-                    requestId = requestId,
-                    success = false,
-                    errorCode = "ORGANIZATION_CODE_MISMATCH"
-                )
-            }
-            return
-        }
-
-        if (
-            jobId <= 0L ||
-            !requestId.matches(Regex("^[a-f0-9]{32}$")) ||
-            phoneNumber.isBlank() ||
-            message.isBlank()
-        ) {
-            Log.e(TAG, "Received invalid SMS job")
-
-            if (
-                jobId > 0L &&
-                requestId.matches(Regex("^[a-f0-9]{32}$"))
-            ) {
-                reportResult(
-                    jobId = jobId,
-                    requestId = requestId,
-                    success = false,
-                    errorCode = "INVALID_JOB"
-                )
-            } else {
-                requestInProgress = false
-                updateStatus("Invalid job received — check server")
-            }
-
             return
         }
 
@@ -603,6 +580,28 @@ class GatewayService : Service() {
                     errorCode = "SMS_SUBMISSION_FAILED"
                 )
             }
+        }
+    }
+
+    /** Report a claimed job that was rejected before Android SMS submission. */
+    private fun rejectClaimedJob(
+        jobId: Long,
+        requestId: String,
+        errorCode: String,
+        userMessage: String
+    ) {
+        requestInProgress = false
+        updateStatus(userMessage)
+
+        if (jobId > 0L && requestId.matches(Regex("^[a-f0-9]{32}$"))) {
+            reportResult(
+                jobId = jobId,
+                requestId = requestId,
+                success = false,
+                errorCode = errorCode
+            )
+        } else {
+            Log.e(TAG, "Cannot report rejected job: invalid job ID or request ID")
         }
     }
 
