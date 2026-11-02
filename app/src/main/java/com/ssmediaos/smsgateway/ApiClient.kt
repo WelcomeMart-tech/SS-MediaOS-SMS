@@ -115,12 +115,15 @@ object ApiClient {
                     )
                 }
 
-                if (
-                    mobile.isNotBlank() &&
-                    (
-                        mobile.any { !it.isDigit() } ||
-                        mobile.length !in 8..15
+                if (mobile.isBlank()) {
+                    throw IOException(
+                        "REGISTERED_MOBILE_REQUIRED: Enter the mobile number registered with the institution."
                     )
+                }
+
+                if (
+                    mobile.any { !it.isDigit() && it != '+' && it != '-' && it != ' ' && it != '(' && it != ')' } ||
+                    normalizeMobile(mobile).length !in 8..15
                 ) {
                     throw IOException(
                         "INVALID_REGISTERED_MOBILE: Check the registered mobile number."
@@ -167,7 +170,9 @@ object ApiClient {
                 // Diagnostics PASS alone is not organization verification.
                 // Require all mandatory checks and the authoritative Client
                 // Database organization record before saving verification.
+                val diagnosticData = response.optJSONObject("data") ?: response
                 val checks = response.optJSONObject("checks")
+                    ?: diagnosticData.optJSONObject("checks")
                     ?: throw IOException(
                         "DIAGNOSTIC_CHECKS_MISSING: Main Server did not return diagnostic checks."
                     )
@@ -186,64 +191,68 @@ object ApiClient {
                     )
                 }
 
-                val data = response.optJSONObject("data")
-                val organization = data?.optJSONObject("organization")
+                val data = diagnosticData
+                // Main Server currently returns a flat data object. Also accept
+                // the older nested organization object for backward compatibility.
+                val organization = data.optJSONObject("organization")
                     ?: response.optJSONObject("organization")
-                    ?: throw IOException(
-                        "ORGANIZATION_DATA_MISSING: Main Server did not return the verified Client Database organization."
-                    )
+                    ?: data
 
                 val returnedCode = firstNonBlank(
-                    organization.optString("code"),
-                    organization.optString("organization_code")
+                    organization.optString("organization_code"),
+                    organization.optString("institution_code"),
+                    organization.optString("hospital_code"),
+                    organization.optString("code")
                 ).uppercase()
                 val organizationId = firstNonBlank(
-                    organization.optString("id"),
-                    organization.optString("organization_id")
+                    organization.optString("organization_id"),
+                    organization.optString("institution_id"),
+                    organization.optString("hospital_id"),
+                    organization.optString("id")
                 )
                 val organizationName = firstNonBlank(
-                    organization.optString("name"),
-                    organization.optString("organization_name")
+                    organization.optString("organization_name"),
+                    organization.optString("institution_name"),
+                    organization.optString("hospital_name"),
+                    organization.optString("name")
                 )
                 val registeredMobile = normalizeMobile(firstNonBlank(
-                    organization.optString("mobile"),
                     organization.optString("mobile_number"),
-                    organization.optString("registered_mobile")
+                    organization.optString("registered_mobile_number"),
+                    organization.optString("registered_mobile"),
+                    organization.optString("mobile")
                 ))
                 val organizationStatus = firstNonBlank(
+                    organization.optString("organization_status"),
                     organization.optString("status"),
-                    organization.optString("organization_status")
+                    organization.optString("verification_status")
                 )
+                val serverVerified = data.optBoolean(
+                    "verified",
+                    data.optBoolean("success", response.optBoolean("verified", true))
+                ) && organizationStatus.equals("active", true).let { active ->
+                    active || organizationStatus.equals("verified", true)
+                }
 
+                if (!serverVerified) {
+                    SecureConfig.clearOrganizationVerification(context)
+                    throw IOException("ORGANIZATION_NOT_VERIFIED: Main Server did not confirm a verified organization record.")
+                }
                 if (returnedCode.isBlank() || returnedCode != code.uppercase()) {
                     SecureConfig.clearOrganizationVerification(context)
-                    throw IOException(
-                        "ORGANIZATION_CODE_MISMATCH: Client Database Organization Code does not exactly match the entered code."
-                    )
+                    throw IOException("ORGANIZATION_CODE_MISMATCH: Client Database Organization Code does not exactly match the entered code.")
                 }
                 if (organizationId.isBlank() || organizationName.isBlank()) {
                     SecureConfig.clearOrganizationVerification(context)
-                    throw IOException(
-                        "ORGANIZATION_DATA_INCOMPLETE: Client Database did not return Organization ID and Name."
-                    )
+                    throw IOException("ORGANIZATION_DATA_INCOMPLETE: Client Database did not return Organization ID and Organization Name.")
                 }
                 if (registeredMobile.length !in 8..15) {
                     SecureConfig.clearOrganizationVerification(context)
-                    throw IOException(
-                        "REGISTERED_MOBILE_MISSING: Client Database did not return a valid registered mobile number."
-                    )
+                    throw IOException("REGISTERED_MOBILE_MISSING: Client Database did not return a valid registered mobile number.")
                 }
                 if (normalizeMobile(mobile) != registeredMobile) {
                     SecureConfig.clearOrganizationVerification(context)
-                    throw IOException(
-                        "REGISTERED_MOBILE_MISMATCH: Entered mobile number does not match the Client Database registered mobile."
-                    )
-                }
-                if (!organizationStatus.equals("active", ignoreCase = true)) {
-                    SecureConfig.clearOrganizationVerification(context)
-                    throw IOException(
-                        "ORGANIZATION_INACTIVE: Only an Active organization can use this SMS gateway."
-                    )
+                    throw IOException("REGISTERED_MOBILE_MISMATCH: Entered mobile number does not match the Client Database registered mobile.")
                 }
 
                 if (!SecureConfig.saveVerifiedOrganization(
@@ -255,9 +264,7 @@ object ApiClient {
                     organizationStatus = organizationStatus
                 )) {
                     SecureConfig.clearOrganizationVerification(context)
-                    throw IOException(
-                        "ORGANIZATION_SAVE_FAILED: Verified organization details could not be saved."
-                    )
+                    throw IOException("ORGANIZATION_SAVE_FAILED: Verified organization details could not be saved.")
                 }
 
                 response
@@ -406,8 +413,8 @@ object ApiClient {
                     throw IOException("INVALID_JOB_ID: Invalid SMS job ID.")
                 }
 
-                if (requestId.isBlank()) {
-                    throw IOException("REQUEST_ID_REQUIRED: Request ID is missing.")
+                if (!requestId.matches(Regex("^[a-fA-F0-9]{32}$"))) {
+                    throw IOException("INVALID_REQUEST_ID: Request ID must be a 32-character hexadecimal value.")
                 }
 
                 val context = AppContextHolder.context
@@ -416,8 +423,11 @@ object ApiClient {
                     .put("job_id", jobId)
                     .put("request_id", requestId)
                     .put("success", success)
-                    .put("provider_message_id", providerMessageId ?: "")
-                    .put("error_code", errorCode ?: "")
+                    .put("provider_message_id", providerMessageId?.trim()?.take(150) ?: "")
+                    .put(
+                        "error_code",
+                        errorCode?.trim()?.replace(Regex("[^A-Za-z0-9_.-]"), "_")?.take(100) ?: ""
+                    )
 
                 val response = request(
                     endpoint = buildEndpoint(
@@ -546,6 +556,7 @@ object ApiClient {
     private fun normalizeMobile(value: String): String {
         val digits = value.filter { it.isDigit() }
         return when {
+            digits.length == 14 && digits.startsWith("0091") -> digits.takeLast(10)
             digits.length == 12 && digits.startsWith("91") -> digits.takeLast(10)
             digits.length == 11 && digits.startsWith("0") -> digits.takeLast(10)
             else -> digits
