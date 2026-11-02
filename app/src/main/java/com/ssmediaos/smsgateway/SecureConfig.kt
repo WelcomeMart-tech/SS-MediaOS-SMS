@@ -4,7 +4,6 @@ import android.content.Context
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
-import java.net.URI
 import java.security.KeyStore
 import java.util.UUID
 import javax.crypto.Cipher
@@ -24,14 +23,12 @@ object SecureConfig {
     private const val KEY_API_TOKEN = "api_token"
     private const val KEY_DEVICE_TOKEN = "device_token"
 
-    // Organization profile values are encrypted with Android Keystore AES-GCM.
     private const val KEY_ORGANIZATION_CODE = "organization_code"
     private const val KEY_REGISTERED_MOBILE = "registered_mobile"
     private const val KEY_ORGANIZATION_NAME = "organization_name"
     private const val KEY_ORGANIZATION_ID = "organization_id"
     private const val KEY_ORGANIZATION_STATUS = "organization_status"
     private const val KEY_ORGANIZATION_VERIFIED = "organization_verified"
-    private const val KEY_ORGANIZATION_VERIFIED_AT = "organization_verified_at"
 
     private const val KEY_SELECTED_SIM_SUBSCRIPTION_ID =
         "selected_sim_subscription_id"
@@ -182,8 +179,8 @@ object SecureConfig {
 
 
     /**
-     * Save the identity entered by the operator. This is NOT verification.
-     * A changed code/mobile invalidates the old verified profile and device token.
+     * Save the code/mobile entered by the operator before verification.
+     * This does NOT mark the organization as verified.
      */
     @Synchronized
     fun saveOrganizationIdentity(
@@ -191,112 +188,112 @@ object SecureConfig {
         organizationCode: String,
         registeredMobile: String
     ): Boolean {
-        val code = organizationCode.trim()
+        val code = organizationCode.trim().uppercase()
         val mobile = registeredMobile.filter { it.isDigit() }
         if (code.isBlank() || mobile.length !in 8..15) return false
 
-        val oldCode = getOrganizationCode(context)
-        val oldMobile = getRegisteredMobile(context)
+        val prefs = preferences(context)
+        val oldCode = prefs.getString(KEY_ORGANIZATION_CODE, "").orEmpty()
+        val oldMobile = prefs.getString(KEY_REGISTERED_MOBILE, "").orEmpty()
         val changed = oldCode != code || oldMobile != mobile
-
-        val encryptedCode = encryptSecret(code) ?: return false
-        val encryptedMobile = encryptSecret(mobile) ?: return false
-        val editor = preferences(context).edit()
-            .putString(KEY_ORGANIZATION_CODE, encryptedCode)
-            .putString(KEY_REGISTERED_MOBILE, encryptedMobile)
+        val editor = prefs.edit()
+            .putString(KEY_ORGANIZATION_CODE, code)
+            .putString(KEY_REGISTERED_MOBILE, mobile)
 
         if (changed) {
             editor.putBoolean(KEY_ORGANIZATION_VERIFIED, false)
                 .remove(KEY_ORGANIZATION_NAME)
                 .remove(KEY_ORGANIZATION_ID)
                 .remove(KEY_ORGANIZATION_STATUS)
-                .remove(KEY_ORGANIZATION_VERIFIED_AT)
                 .remove(KEY_DEVICE_TOKEN)
         }
         return editor.commit()
     }
 
+    fun getOrganizationCode(context: Context): String =
+        preferences(context).getString(KEY_ORGANIZATION_CODE, "").orEmpty()
+
+    fun getRegisteredMobile(context: Context): String =
+        preferences(context).getString(KEY_REGISTERED_MOBILE, "").orEmpty()
+
+    fun getOrganizationName(context: Context): String =
+        preferences(context).getString(KEY_ORGANIZATION_NAME, "").orEmpty()
+
+    fun getOrganizationId(context: Context): String =
+        preferences(context).getString(KEY_ORGANIZATION_ID, "").orEmpty()
+
+    fun getOrganizationStatus(context: Context): String =
+        preferences(context).getString(KEY_ORGANIZATION_STATUS, "").orEmpty()
+
+    fun isOrganizationVerified(context: Context): Boolean {
+        val prefs = preferences(context)
+        return prefs.getBoolean(KEY_ORGANIZATION_VERIFIED, false) &&
+            prefs.getString(KEY_ORGANIZATION_CODE, "").orEmpty().isNotBlank() &&
+            prefs.getString(KEY_ORGANIZATION_ID, "").orEmpty().isNotBlank() &&
+            prefs.getString(KEY_ORGANIZATION_NAME, "").orEmpty().isNotBlank() &&
+            prefs.getString(KEY_REGISTERED_MOBILE, "").orEmpty().isNotBlank() &&
+            (prefs.getString(KEY_ORGANIZATION_STATUS, "").orEmpty().equals("active", true) ||
+                prefs.getString(KEY_ORGANIZATION_STATUS, "").orEmpty().equals("verified", true))
+    }
+
     /**
-     * Save the five authoritative Organization Details returned by Main Server
-     * after it has verified the Client Server/Database record.
-     * No locally typed or guessed organization details should be passed here.
+     * Atomically persist the authoritative organization object returned by
+     * Main Server after its Client Database lookup and exact code match.
+     * Call this only after checking the API's verified/success flags.
      */
     @Synchronized
-    fun saveVerifiedOrganizationDetails(
+    fun saveVerifiedOrganization(
         context: Context,
-        organizationName: String,
         organizationId: String,
+        organizationName: String,
         organizationCode: String,
         registeredMobile: String,
-        organizationStatus: String,
-        verified: Boolean
+        organizationStatus: String
     ): Boolean {
-        val name = organizationName.trim()
         val id = organizationId.trim()
-        val code = organizationCode.trim()
+        val name = organizationName.trim()
+        val code = organizationCode.trim().uppercase()
         val mobile = registeredMobile.filter { it.isDigit() }
         val status = organizationStatus.trim()
 
-        val requestedCode = getOrganizationCode(context)
-        val requestedMobile = getRegisteredMobile(context)
-        val activeStatus = status.equals("ACTIVE", true) ||
-            status.equals("VERIFIED", true)
-
-        if (!verified || !activeStatus || name.isBlank() || id.isBlank() ||
-            code.isBlank() || mobile.length !in 8..15 ||
-            requestedCode.isBlank() || !code.equals(requestedCode, true) ||
-            requestedMobile.isBlank() || mobile != requestedMobile) {
+        if (id.isBlank() || name.isBlank() || code.isBlank() ||
+            mobile.length !in 8..15 ||
+            !(status.equals("active", true) || status.equals("verified", true))) {
             clearOrganizationVerification(context)
             return false
         }
 
-        val encryptedName = encryptSecret(name) ?: return false
-        val encryptedId = encryptSecret(id) ?: return false
-        val encryptedCode = encryptSecret(code) ?: return false
-        val encryptedMobile = encryptSecret(mobile) ?: return false
-        val encryptedStatus = encryptSecret(status) ?: return false
-
-        return preferences(context).edit()
-            .putString(KEY_ORGANIZATION_NAME, encryptedName)
-            .putString(KEY_ORGANIZATION_ID, encryptedId)
-            .putString(KEY_ORGANIZATION_CODE, encryptedCode)
-            .putString(KEY_REGISTERED_MOBILE, encryptedMobile)
-            .putString(KEY_ORGANIZATION_STATUS, encryptedStatus)
-            .putBoolean(KEY_ORGANIZATION_VERIFIED, true)
-            .putLong(KEY_ORGANIZATION_VERIFIED_AT, System.currentTimeMillis())
-            .commit()
-    }
-
-    fun getOrganizationCode(context: Context): String =
-        readSecret(context, KEY_ORGANIZATION_CODE).orEmpty()
-
-    fun getRegisteredMobile(context: Context): String =
-        readSecret(context, KEY_REGISTERED_MOBILE).orEmpty()
-
-    fun getOrganizationName(context: Context): String =
-        readSecret(context, KEY_ORGANIZATION_NAME).orEmpty()
-
-    fun getOrganizationId(context: Context): String =
-        readSecret(context, KEY_ORGANIZATION_ID).orEmpty()
-
-    fun getOrganizationStatus(context: Context): String =
-        readSecret(context, KEY_ORGANIZATION_STATUS).orEmpty()
-
-    fun getOrganizationVerifiedAt(context: Context): Long =
-        preferences(context).getLong(KEY_ORGANIZATION_VERIFIED_AT, 0L)
-
-    fun isOrganizationVerified(context: Context): Boolean {
         val prefs = preferences(context)
-        val status = getOrganizationStatus(context)
-        return prefs.getBoolean(KEY_ORGANIZATION_VERIFIED, false) &&
-            getOrganizationName(context).isNotBlank() &&
-            getOrganizationId(context).isNotBlank() &&
-            getOrganizationCode(context).isNotBlank() &&
-            getRegisteredMobile(context).isNotBlank() &&
-            (status.equals("ACTIVE", true) || status.equals("VERIFIED", true))
+        val previousCode = prefs.getString(KEY_ORGANIZATION_CODE, "").orEmpty()
+        val previousId = prefs.getString(KEY_ORGANIZATION_ID, "").orEmpty()
+        val identityChanged = previousCode != code || previousId != id
+        val editor = prefs.edit()
+            .putString(KEY_ORGANIZATION_ID, id)
+            .putString(KEY_ORGANIZATION_NAME, name)
+            .putString(KEY_ORGANIZATION_CODE, code)
+            .putString(KEY_REGISTERED_MOBILE, mobile)
+            .putString(KEY_ORGANIZATION_STATUS, if (status.equals("verified", true)) "Verified" else "Active")
+            .putBoolean(KEY_ORGANIZATION_VERIFIED, true)
+
+        if (identityChanged) editor.remove(KEY_DEVICE_TOKEN)
+        return editor.commit()
     }
 
-    /** Backward-compatible helper for older callers. */
+    /**
+     * Legacy compatibility method.
+     *
+     * A local caller must never be able to grant organization verification.
+     * Only saveVerifiedOrganization(), after ApiClient has validated the
+     * authoritative Main Server response and all required diagnostic checks,
+     * may set KEY_ORGANIZATION_VERIFIED=true.
+     *
+     * Passing verified=false remains supported so older callers can clear
+     * a verification state safely. Passing true returns false and changes
+     * no verification data.
+     */
+    @Deprecated(
+        message = "Use saveVerifiedOrganization() only after Main Server verification."
+    )
     @Synchronized
     fun saveOrganizationVerification(
         context: Context,
@@ -304,13 +301,7 @@ object SecureConfig {
         organizationName: String = ""
     ): Boolean {
         if (!verified) return clearOrganizationVerification(context)
-        val code = getOrganizationCode(context)
-        val mobile = getRegisteredMobile(context)
-        val id = getOrganizationId(context)
-        val status = getOrganizationStatus(context).ifBlank { "ACTIVE" }
-        return saveVerifiedOrganizationDetails(
-            context, organizationName, id, code, mobile, status, true
-        )
+        return false
     }
 
     fun clearOrganizationVerification(context: Context): Boolean =
@@ -319,7 +310,6 @@ object SecureConfig {
             .remove(KEY_ORGANIZATION_NAME)
             .remove(KEY_ORGANIZATION_ID)
             .remove(KEY_ORGANIZATION_STATUS)
-            .remove(KEY_ORGANIZATION_VERIFIED_AT)
             .remove(KEY_DEVICE_TOKEN)
             .commit()
 
@@ -654,41 +644,5 @@ object SecureConfig {
     }
 
 
-    /**
-     * Compatibility helper retained for older callers.
-     * Only valid HTTPS URLs are accepted.
-     */
-    private fun normalizeServerUrl(
-        value: String
-    ): String? {
 
-        val normalized = value.trim().trimEnd('/')
-
-        if (normalized.isBlank()) {
-            return null
-        }
-
-        return try {
-
-            val uri = URI(normalized)
-
-            if (
-                uri.scheme.equals(
-                    "https",
-                    ignoreCase = true
-                ) &&
-                !uri.host.isNullOrBlank() &&
-                uri.rawUserInfo == null &&
-                uri.rawQuery == null &&
-                uri.rawFragment == null
-            ) {
-                normalized
-            } else {
-                null
-            }
-
-        } catch (_: Exception) {
-            null
-        }
-    }
 }
