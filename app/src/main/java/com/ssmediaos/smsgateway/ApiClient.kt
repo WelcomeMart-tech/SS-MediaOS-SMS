@@ -145,7 +145,7 @@ object ApiClient {
                     .put("registeredMobileNumber", mobile)
                     .put("deviceCode", deviceCode)
 
-                request(
+                val response = request(
                     endpoint = buildEndpoint(
                         getServerUrl(context),
                         GATEWAY_DIAGNOSTICS_PATH
@@ -155,6 +155,112 @@ object ApiClient {
                     body = body,
                     allowHttpErrors = true
                 )
+
+                val httpStatus = response.optInt("_httpStatus", 200)
+                if (httpStatus !in 200..299 || !response.optBoolean("ok", false)) {
+                    SecureConfig.clearOrganizationVerification(context)
+                    throw IOException(
+                        buildServerError(response, httpStatus, "GATEWAY_DIAGNOSTICS_FAILED")
+                    )
+                }
+
+                // Diagnostics PASS alone is not organization verification.
+                // Require all mandatory checks and the authoritative Client
+                // Database organization record before saving verification.
+                val checks = response.optJSONObject("checks")
+                    ?: throw IOException(
+                        "DIAGNOSTIC_CHECKS_MISSING: Main Server did not return diagnostic checks."
+                    )
+                val requiredChecks = listOf(
+                    "main_server", "company_auth", "client_api_config",
+                    "client_api", "client_database", "institution"
+                )
+                val failedChecks = requiredChecks.filter { name ->
+                    checks.optJSONObject(name)?.optString("status", "UNKNOWN")
+                        ?.equals("PASS", ignoreCase = true) != true
+                }
+                if (failedChecks.isNotEmpty()) {
+                    SecureConfig.clearOrganizationVerification(context)
+                    throw IOException(
+                        "DIAGNOSTICS_INCOMPLETE: Required checks did not pass: ${failedChecks.joinToString(", ")}."
+                    )
+                }
+
+                val data = response.optJSONObject("data")
+                val organization = data?.optJSONObject("organization")
+                    ?: response.optJSONObject("organization")
+                    ?: throw IOException(
+                        "ORGANIZATION_DATA_MISSING: Main Server did not return the verified Client Database organization."
+                    )
+
+                val returnedCode = firstNonBlank(
+                    organization.optString("code"),
+                    organization.optString("organization_code")
+                ).uppercase()
+                val organizationId = firstNonBlank(
+                    organization.optString("id"),
+                    organization.optString("organization_id")
+                )
+                val organizationName = firstNonBlank(
+                    organization.optString("name"),
+                    organization.optString("organization_name")
+                )
+                val registeredMobile = normalizeMobile(firstNonBlank(
+                    organization.optString("mobile"),
+                    organization.optString("mobile_number"),
+                    organization.optString("registered_mobile")
+                ))
+                val organizationStatus = firstNonBlank(
+                    organization.optString("status"),
+                    organization.optString("organization_status")
+                )
+
+                if (returnedCode.isBlank() || returnedCode != code.uppercase()) {
+                    SecureConfig.clearOrganizationVerification(context)
+                    throw IOException(
+                        "ORGANIZATION_CODE_MISMATCH: Client Database Organization Code does not exactly match the entered code."
+                    )
+                }
+                if (organizationId.isBlank() || organizationName.isBlank()) {
+                    SecureConfig.clearOrganizationVerification(context)
+                    throw IOException(
+                        "ORGANIZATION_DATA_INCOMPLETE: Client Database did not return Organization ID and Name."
+                    )
+                }
+                if (registeredMobile.length !in 8..15) {
+                    SecureConfig.clearOrganizationVerification(context)
+                    throw IOException(
+                        "REGISTERED_MOBILE_MISSING: Client Database did not return a valid registered mobile number."
+                    )
+                }
+                if (normalizeMobile(mobile) != registeredMobile) {
+                    SecureConfig.clearOrganizationVerification(context)
+                    throw IOException(
+                        "REGISTERED_MOBILE_MISMATCH: Entered mobile number does not match the Client Database registered mobile."
+                    )
+                }
+                if (!organizationStatus.equals("active", ignoreCase = true)) {
+                    SecureConfig.clearOrganizationVerification(context)
+                    throw IOException(
+                        "ORGANIZATION_INACTIVE: Only an Active organization can use this SMS gateway."
+                    )
+                }
+
+                if (!SecureConfig.saveVerifiedOrganization(
+                    context = context,
+                    organizationId = organizationId,
+                    organizationName = organizationName,
+                    organizationCode = returnedCode,
+                    registeredMobile = registeredMobile,
+                    organizationStatus = organizationStatus
+                )) {
+                    SecureConfig.clearOrganizationVerification(context)
+                    throw IOException(
+                        "ORGANIZATION_SAVE_FAILED: Verified organization details could not be saved."
+                    )
+                }
+
+                response
             }
 
             callbackSafely(callback, result)
@@ -429,6 +535,20 @@ object ApiClient {
             }
 
             callbackSafely(callback, result)
+        }
+    }
+
+    private fun firstNonBlank(vararg values: String): String =
+        values.firstOrNull { it.isNotBlank() && !it.equals("null", true) }
+            ?.trim()
+            .orEmpty()
+
+    private fun normalizeMobile(value: String): String {
+        val digits = value.filter { it.isDigit() }
+        return when {
+            digits.length == 12 && digits.startsWith("91") -> digits.takeLast(10)
+            digits.length == 11 && digits.startsWith("0") -> digits.takeLast(10)
+            else -> digits
         }
     }
 
