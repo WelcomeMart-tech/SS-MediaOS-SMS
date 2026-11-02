@@ -7,6 +7,9 @@
     <!-- Sending SMS only -->
     <uses-permission android:name="android.permission.SEND_SMS" />
 
+    <!-- Read active SIM subscriptions for assigned-SIM selection. -->
+    <uses-permission android:name="android.permission.READ_PHONE_STATE" />
+
     <!-- Notifications on Android 13+ -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
