@@ -295,11 +295,25 @@ class GatewayService : Service() {
         }
 
         if (!SecureConfig.isOrganizationVerified(this)) {
-            Log.w(TAG, "Gateway start blocked: organization/mobile is not verified")
+            Log.w(TAG, "Gateway start blocked: institution/mobile is not verified")
 
             saveServiceRunning(false)
             setServerState(STATE_FAILED)
-            updateStatus("Organization and registered mobile must be verified first")
+            updateStatus("Verify the institution and registered mobile first")
+            stopSelf(startId)
+            return
+        }
+
+        // A gateway must be bound to exactly one verified institution.
+        // Do not start polling if the authoritative institution identity is incomplete.
+        val verifiedInstitutionId = SecureConfig.getOrganizationId(this).trim()
+        val verifiedInstitutionName = SecureConfig.getOrganizationName(this).trim()
+        val verifiedInstitutionCode = SecureConfig.getOrganizationCode(this).trim()
+        if (verifiedInstitutionId.isBlank() || verifiedInstitutionName.isBlank() || verifiedInstitutionCode.isBlank()) {
+            Log.w(TAG, "Gateway start blocked: verified institution identity is incomplete")
+            saveServiceRunning(false)
+            setServerState(STATE_FAILED)
+            updateStatus("Institution ID, name and code must be verified first")
             stopSelf(startId)
             return
         }
@@ -511,28 +525,37 @@ class GatewayService : Service() {
             return
         }
 
-        // Defense-in-depth organization isolation: every queued job must
-        // explicitly identify the verified organization it belongs to.
-        val verifiedOrganizationCode = SecureConfig
-            .getOrganizationCode(this)
-            .trim()
+        // Institution isolation: both the immutable database ID and exact
+        // institution code must match the one verified on this gateway.
+        val verifiedInstitutionId = SecureConfig.getOrganizationId(this).trim()
+        val verifiedInstitutionCode = SecureConfig.getOrganizationCode(this).trim()
 
-        val jobOrganizationCode = sequenceOf(
-            job.optString("organization_code", ""),
-            job.optString("organizationCode", ""),
+        val jobInstitutionId = sequenceOf(
+            job.optString("institution_id", ""),
+            job.optString("institutionId", ""),
+            job.optString("organization_id", ""),
+            job.optString("organizationId", "")
+        ).map { it.trim() }.firstOrNull { it.isNotBlank() }.orEmpty()
+
+        val jobInstitutionCode = sequenceOf(
             job.optString("institution_code", ""),
-            job.optString("institutionCode", "")
+            job.optString("institutionCode", ""),
+            job.optString("organization_code", ""),
+            job.optString("organizationCode", "")
         ).map { it.trim() }.firstOrNull { it.isNotBlank() }.orEmpty()
 
         if (
-            verifiedOrganizationCode.isBlank() ||
-            jobOrganizationCode.isBlank() ||
-            !verifiedOrganizationCode.equals(jobOrganizationCode, ignoreCase = true)
+            verifiedInstitutionId.isBlank() ||
+            verifiedInstitutionCode.isBlank() ||
+            jobInstitutionId.isBlank() ||
+            jobInstitutionCode.isBlank() ||
+            jobInstitutionId != verifiedInstitutionId ||
+            !jobInstitutionCode.equals(verifiedInstitutionCode, ignoreCase = true)
         ) {
-            Log.e(TAG, "SMS job blocked: organization code missing or mismatched")
+            Log.e(TAG, "SMS job blocked: institution ID/code missing or mismatched")
             rejectClaimedJob(
-                jobId, requestId, "ORGANIZATION_CODE_MISMATCH",
-                "SMS blocked: job does not belong to this verified organization"
+                jobId, requestId, "INSTITUTION_MISMATCH",
+                "SMS blocked: job does not belong to this verified institution"
             )
             return
         }
