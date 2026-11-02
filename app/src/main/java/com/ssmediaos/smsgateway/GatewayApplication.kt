@@ -2,49 +2,40 @@ package com.ssmediaos.smsgateway
 
 import android.app.Application
 import android.content.Context
-import android.util.Log
 
+/**
+ * Application entry point for SS MediaOS SMS Gateway.
+ *
+ * ApiClient uses AppContextHolder.context from its background executor.
+ * Initialize the holder before any Activity or Service starts so API calls
+ * always use the Application context and never retain an Activity instance.
+ */
 class GatewayApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
-
-        try {
-            AppContextHolder.initialize(this)
-            Log.i(TAG, "SS MediaOS SMS Gateway initialized.")
-        } catch (e: Exception) {
-            Log.e(TAG, "Gateway application initialization failed.", e)
-            throw e
-        }
-    }
-
-    companion object {
-        private const val TAG = "GatewayApplication"
+        AppContextHolder.initialize(this)
     }
 }
 
 /**
- * Provides application context to components that need it.
- *
- * Application context is used to avoid retaining Activity or Service
- * references longer than necessary.
+ * Process-wide application context provider.
+ * Keep this in the same package as ApiClient and GatewayApplication.
  */
 object AppContextHolder {
 
     @Volatile
-    private var appContext: Context? = null
+    private var applicationContext: Context? = null
 
+    /** Returns the initialized Application context. */
     val context: Context
-        get() = appContext
+        get() = applicationContext
             ?: throw IllegalStateException(
-                "Application context has not been initialized."
+                "APP_CONTEXT_NOT_INITIALIZED: GatewayApplication has not initialized AppContextHolder."
             )
 
+    /** Called once from GatewayApplication.onCreate(). */
     fun initialize(context: Context) {
-        appContext = context.applicationContext
-    }
-
-    fun isInitialized(): Boolean {
-        return appContext != null
+        applicationContext = context.applicationContext
     }
 }
