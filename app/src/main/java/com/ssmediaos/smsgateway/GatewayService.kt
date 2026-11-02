@@ -48,6 +48,18 @@ class GatewayService : Service() {
     private val smsJobs =
         ConcurrentHashMap<Long, SmsJobState>()
 
+    /**
+     * Keep a claimed job's final result until the Main Server acknowledges it.
+     */
+    private data class PendingGatewayResult(
+        val jobId: Long,
+        val requestId: String,
+        val success: Boolean,
+        val errorCode: String?
+    )
+
+    private val pendingResultLock = Any()
+
     private val pollRunnable = object : Runnable {
         override fun run() {
             if (!serviceRunning) return
@@ -398,6 +410,12 @@ class GatewayService : Service() {
     private fun pollServer() {
         if (!serviceRunning || requestInProgress) return
 
+        // Report a previously claimed job before claiming another one.
+        if (loadPendingResult() != null) {
+            sendPendingResult()
+            return
+        }
+
         requestInProgress = true
         setServerState(STATE_CONNECTING)
 
@@ -597,23 +615,60 @@ class GatewayService : Service() {
         success: Boolean,
         errorCode: String? = null
     ) {
-        if (!serviceRunning) {
+        if (jobId <= 0L || requestId.isBlank()) {
+            Log.e(TAG, "Cannot save invalid SMS result")
             requestInProgress = false
             return
         }
 
-        if (resultReporting) {
-            Log.w(TAG, "A result report is already in progress")
-            return
-        }
-
-        resultReporting = true
-
-        ApiClient.submitGatewayResult(
+        val pending = PendingGatewayResult(
             jobId = jobId,
             requestId = requestId,
             success = success,
             errorCode = errorCode
+        )
+
+        synchronized(pendingResultLock) {
+            val existing = loadPendingResult()
+
+            if (existing != null &&
+                (existing.jobId != jobId || existing.requestId != requestId)
+            ) {
+                Log.e(
+                    TAG,
+                    "A different SMS result is still pending; refusing to overwrite it"
+                )
+                requestInProgress = false
+                return
+            }
+
+            savePendingResult(pending)
+        }
+
+        if (serviceRunning) {
+            sendPendingResult()
+        } else {
+            Log.w(TAG, "SMS result saved locally; service is not running")
+            requestInProgress = false
+        }
+    }
+
+    /**
+     * Submit the locally persisted result. Keep it until the server confirms it.
+     */
+    private fun sendPendingResult() {
+        if (!serviceRunning || resultReporting) return
+
+        val pending = loadPendingResult() ?: return
+
+        resultReporting = true
+        requestInProgress = true
+
+        ApiClient.submitGatewayResult(
+            jobId = pending.jobId,
+            requestId = pending.requestId,
+            success = pending.success,
+            errorCode = pending.errorCode
         ) { result ->
 
             resultReporting = false
@@ -625,48 +680,104 @@ class GatewayService : Service() {
 
             result.fold(
                 onSuccess = { response ->
-
                     if (!response.optBoolean("ok", false)) {
                         Log.e(
                             TAG,
-                            "Server returned an unsuccessful result response"
+                            "Server rejected result for job ${pending.jobId}; keeping it for retry"
                         )
-
                         requestInProgress = false
-                        updateStatus("Result report rejected — check server")
+                        updateStatus("Result report rejected — retrying")
                         return@fold
                     }
 
-                    Log.i(
-                        TAG,
-                        "Server accepted result for job $jobId"
-                    )
+                    synchronized(pendingResultLock) {
+                        val current = loadPendingResult()
+                        if (
+                            current?.jobId == pending.jobId &&
+                            current.requestId == pending.requestId
+                        ) {
+                            clearPendingResult()
+                        }
+                    }
 
+                    Log.i(TAG, "Server accepted result for job ${pending.jobId}")
                     requestInProgress = false
 
-                    if (success) {
-                        updateStatus(
-                            "SMS sent callback successful — waiting for next job"
-                        )
-                    } else {
-                        updateStatus(
-                            "SMS failed — waiting for next job"
-                        )
-                    }
+                    updateStatus(
+                        if (pending.success) {
+                            "SMS result accepted — waiting for next job"
+                        } else {
+                            "SMS failure reported — waiting for next job"
+                        }
+                    )
                 },
 
                 onFailure = { exception ->
-
                     Log.e(
                         TAG,
-                        "Could not report result for job $jobId (${exception.javaClass.simpleName})"
+                        "Could not report result for job ${pending.jobId} " +
+                            "(${exception.javaClass.simpleName})"
                     )
-
+                    // Keep the pending result. pollServer() retries it.
                     requestInProgress = false
-                    updateStatus("Result report failed — check server")
+                    updateStatus("Result report failed — retrying")
                 }
             )
         }
+    }
+
+    private fun savePendingResult(result: PendingGatewayResult) {
+        val json = JSONObject().apply {
+            put("job_id", result.jobId)
+            put("request_id", result.requestId)
+            put("success", result.success)
+            put("error_code", result.errorCode ?: JSONObject.NULL)
+        }
+
+        getSharedPreferences(statusPrefsName, MODE_PRIVATE)
+            .edit()
+            .putString(PREF_PENDING_RESULT, json.toString())
+            .apply()
+    }
+
+    private fun loadPendingResult(): PendingGatewayResult? {
+        val raw = getSharedPreferences(statusPrefsName, MODE_PRIVATE)
+            .getString(PREF_PENDING_RESULT, null)
+            ?: return null
+
+        return try {
+            val json = JSONObject(raw)
+            val jobId = json.optLong("job_id", 0L)
+            val requestId = json.optString("request_id", "").trim()
+
+            if (jobId <= 0L || requestId.isBlank()) {
+                Log.e(TAG, "Stored pending SMS result is invalid")
+                null
+            } else {
+                val errorCode = if (json.isNull("error_code")) {
+                    null
+                } else {
+                    json.optString("error_code")
+                }
+
+                PendingGatewayResult(
+                    jobId = jobId,
+                    requestId = requestId,
+                    success = json.optBoolean("success", false),
+                    errorCode = errorCode
+                )
+            }
+        } catch (exception: Exception) {
+            Log.e(TAG, "Could not read pending SMS result", exception)
+            null
+        }
+    }
+
+    private fun clearPendingResult() {
+        getSharedPreferences(statusPrefsName, MODE_PRIVATE)
+            .edit()
+            .remove(PREF_PENDING_RESULT)
+            .apply()
     }
 
     /**
@@ -832,6 +943,7 @@ class GatewayService : Service() {
         private const val PREF_SERVICE_RUNNING = "service_running"
         private const val PREF_SERVER_STATE = "server_state"
         private const val PREF_SERVER_CHECK_AT = "server_check_at"
+        private const val PREF_PENDING_RESULT = "pending_gateway_result"
 
         private const val STATE_CONNECTED = "CONNECTED"
         private const val STATE_FAILED = "FAILED"
