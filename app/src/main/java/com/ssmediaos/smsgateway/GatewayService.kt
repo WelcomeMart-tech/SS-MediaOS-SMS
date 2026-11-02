@@ -282,7 +282,11 @@ class GatewayService : Service() {
             return
         }
 
-        if (!SecureConfig.isOrganizationVerified(this)) {
+        if (
+            !SecureConfig.isOrganizationVerified(this) ||
+            SecureConfig.getOrganizationCode(this).isBlank() ||
+            SecureConfig.getRegisteredMobile(this).isBlank()
+        ) {
             Log.w(TAG, "Gateway start blocked: organization/mobile is not verified")
 
             saveServiceRunning(false)
@@ -468,6 +472,32 @@ class GatewayService : Service() {
             Log.w(TAG, "SMS job blocked: no SIM is selected")
             requestInProgress = false
             updateStatus("SMS blocked: select an assigned SIM")
+            return
+        }
+
+        // Organization isolation: never send a job unless the server explicitly
+        // tags it with the exact organization code verified on this device.
+        // Do not infer ownership from a phone number, company name, or device ID.
+        val verifiedOrganizationCode =
+            SecureConfig.getOrganizationCode(this).trim()
+
+        val jobOrganizationCode =
+            job.optString("organization_code", "").trim()
+
+        if (
+            verifiedOrganizationCode.isBlank() ||
+            jobOrganizationCode.isBlank() ||
+            !jobOrganizationCode.equals(verifiedOrganizationCode, ignoreCase = false)
+        ) {
+            Log.e(
+                TAG,
+                "SMS job blocked: organization code mismatch or missing. " +
+                    "verifiedCodePresent=${verifiedOrganizationCode.isNotBlank()}, " +
+                    "jobCodePresent=${jobOrganizationCode.isNotBlank()}"
+            )
+            requestInProgress = false
+            updateStatus("SMS blocked: job does not belong to this verified organization")
+            setServerState(STATE_FAILED)
             return
         }
 
