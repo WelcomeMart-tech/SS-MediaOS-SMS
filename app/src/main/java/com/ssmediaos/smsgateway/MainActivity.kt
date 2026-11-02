@@ -101,7 +101,7 @@ class MainActivity : Activity() {
             orientation = LinearLayout.VERTICAL
         }
         appBarTitle.addView(textView("SS MediaOS", 17f, navy, true))
-        appBarTitle.addView(textView("SMS GATEWAY", 10f, textMuted, true))
+        appBarTitle.addView(textView("SMS GATEWAY • CONTROL CENTER", 10f, textMuted, true))
         appBar.addView(appBarTitle, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
 
         val appBarStatus = TextView(this).apply {
@@ -293,7 +293,11 @@ class MainActivity : Activity() {
         smsStatsRow.addView(receivedCard, LinearLayout.LayoutParams(0, dp(112), 1f).apply { marginStart = dp(5) })
         content.addView(smsStatsRow, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
-        ).apply { bottomMargin = dp(18) })
+        ).apply { bottomMargin = dp(8) })
+        content.addView(textView(
+            "Period-wise Today / Week / Month / Year totals will display after timestamped SMS history is connected. Current local counter is a lifetime aggregate.",
+            11f, textMuted, false
+        ).apply { setPadding(dp(4), 0, dp(4), dp(14)) })
 
         val permissionCard = createStatCard(
             "SMS PERMISSION",
@@ -312,259 +316,13 @@ class MainActivity : Activity() {
             }
         )
 
-        // Gateway controls
-        content.addView(
-            sectionTitle(
-                "Gateway Controls",
-                "Manage your SMS gateway"
-            ).apply { tag = "nav_gateway" }
-        )
-
-        val gatewayCard = createCard()
-
-        gatewayText = textView(
-            "Gateway service status will appear here.",
-            14f,
-            textDark,
-            true
-        )
-
-        gatewayText.setPadding(0, 0, 0, dp(14))
-        gatewayCard.addView(gatewayText)
-
-        gatewayCard.addView(
-            actionButton(
-                "▶   Start Gateway Service",
-                green
-            ) {
-                startGatewayService()
-            },
-            buttonLayout()
-        )
-
-        gatewayCard.addView(
-            actionButton(
-                "■   Stop Gateway Service",
-                Color.rgb(220, 53, 69)
-            ) {
-                stopGatewayService()
-            },
-            buttonLayout()
-        )
-
-        content.addView(
-            gatewayCard,
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply {
-                bottomMargin = dp(22)
-            }
-        )
-
-        // SMS services
-        content.addView(
-            sectionTitle(
-                "SMS Services",
-                "Access your SMS tools"
-            ).apply { tag = "nav_sms" }
-        )
-
-        val smsCard = createCard()
-
-        smsCard.addView(
-            textView(
-                "SMS Gateway",
-                17f,
-                textDark,
-                true
-            )
-        )
-
-        smsCard.addView(
-            textView(
-                "Use the authorized gateway to send business messages. " +
-                    "This app does not access your incoming SMS inbox.",
-                13f,
-                textMuted,
-                false
-            ).apply {
-                setPadding(0, dp(6), 0, dp(12))
-            }
-        )
-
-        content.addView(
-            smsCard,
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply {
-                bottomMargin = dp(22)
-            }
-        )
-
-        // Gateway settings
-        content.addView(
-            sectionTitle(
-                "Gateway Settings",
-                "Configure your server and device"
-            ).apply { tag = "nav_settings" }
-        )
-
-        val settingsCard = createCard()
-
-        settingsCard.addView(
-            textView(
-                "Server URL, Device Code and Activation Token",
-                16f,
-                textDark,
-                true
-            )
-        )
-
-        settingsCard.addView(
-            textView(
-                "Configure the SS MediaOS server and activate this device " +
-                    "before sending SMS.",
-                13f,
-                textMuted,
-                false
-            ).apply {
-                setPadding(0, dp(7), 0, dp(14))
-            }
-        )
-
-        settingsCard.addView(
-            actionButton(
-                "⚙   Open Gateway Settings",
-                blue
-            ) {
-                openGatewaySettings()
-            },
-            buttonLayout()
-        )
-
-        content.addView(
-            settingsCard,
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply {
-                bottomMargin = dp(22)
-            }
-        )
-
-        // System information
-        content.addView(
-            sectionTitle(
-                "System Information",
-                "Current device status"
-            ).apply { tag = "nav_system" }
-        )
-
-        val systemCard = createCard()
-
-        serverText = textView(
-            "Server: Not configured",
-            14f,
-            textDark,
-            false
-        )
-
-        permissionText = textView(
-            "SMS Permission: Checking",
-            14f,
-            textDark,
-            false
-        )
-
-        statusText = textView(
-            "App Status: Running",
-            14f,
-            textDark,
-            false
-        )
-
-        systemCard.addView(serverText)
-
-        systemCard.addView(
-            permissionText.apply {
-                setPadding(0, dp(12), 0, 0)
-            }
-        )
-
-        systemCard.addView(
-            statusText.apply {
-                setPadding(0, dp(12), 0, 0)
-            }
-        )
-
-        systemCard.addView(
-            actionButton(
-                "↻   Refresh Status",
-                blue
-            ) {
-                updateStatus("Status refreshed.")
-            }.apply {
-                setPadding(dp(12), 0, dp(12), 0)
-            },
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                dp(48)
-            ).apply {
-                topMargin = dp(18)
-            }
-        )
-
-        content.addView(
-            systemCard,
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply {
-                bottomMargin = dp(22)
-            }
-        )
-
-        // Legal, privacy and responsible-messaging policies
-        content.addView(
-            sectionTitle(
-                "Privacy & Messaging Policies",
-                "Clear rules for data protection and responsible SMS use"
-            ).apply { tag = "nav_policies" }
-        )
-
-        val policyCard = createCard()
-        policyCard.addView(
-            textView(
-                "Please review how this gateway handles device data and SMS requests.",
-                13f,
-                textMuted,
-                false
-            ).apply { setPadding(0, 0, 0, dp(12)) }
-        )
-        policyCard.addView(
-            actionButton("🔒   Privacy Policy", navy) {
-                showPolicyDialog("Privacy Policy", privacyPolicyText())
-            }, buttonLayout()
-        )
-        policyCard.addView(
-            actionButton("📡   Telecom & SMS Policy", blue) {
-                showPolicyDialog("Telecom & SMS Policy", telecomSmsPolicyText())
-            }, buttonLayout()
-        )
-        policyCard.addView(
-            actionButton("🛡   DND, Consent & Opt-out Rules", Color.rgb(15, 118, 110)) {
-                showPolicyDialog("DND, Consent & Opt-out Rules", dndPolicyText())
-            }, buttonLayout()
-        )
-        content.addView(
-            policyCard,
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { bottomMargin = dp(22) }
-        )
+        // Keep operational status fields initialized for the existing service/status logic.
+        // Detailed controls and settings are intentionally moved to the Sidebar so the
+        // Dashboard remains a clean overview instead of a long mixed page.
+        gatewayText = textView("Gateway service status", 1f, textMuted, false)
+        serverText = textView("Server: Not configured", 1f, textMuted, false)
+        permissionText = textView("SMS Permission: Checking", 1f, textMuted, false)
+        statusText = textView("App Status: Running", 1f, textMuted, false)
 
         // Footer: developer credit intentionally shown only here
         val footer = LinearLayout(this).apply {
@@ -584,7 +342,7 @@ class MainActivity : Activity() {
 
         footer.addView(
             textView(
-                "Delivered by Shivam Yadav",
+                "Developed by Shivam Yadav",
                 12f,
                 textMuted,
                 false
@@ -717,29 +475,38 @@ class MainActivity : Activity() {
             ).apply { bottomMargin = dp(7) })
         }
 
-        addDrawerItem("Dashboard", "⌂", {
-            dashboardScroll.smoothScrollTo(0, 0)
-        })
+        addDrawerItem("OVERVIEW", "▰", { dashboardScroll.smoothScrollTo(0, 0) })
+        addDrawerItem("Dashboard", "⌂", { dashboardScroll.smoothScrollTo(0, 0) })
         addDrawerItem("SMS Logs", "▤", {
-            showToast("SMS Logs screen is not available in this app build yet.")
-        }, enabled = false)
-        addDrawerItem("Reports & Analytics", "▥", {
-            showToast("Reports & Analytics screen is not available in this app build yet.")
-        }, enabled = false)
-        addDrawerItem("Permissions & Roles", "♙", {
-            showToast("Permissions & Roles are managed by the connected organization server.")
-        }, enabled = false)
-        addDrawerItem("Gateway Device", "▣", {
-            openGatewaySettings()
+            showPolicyDialog("SMS Logs", "SMS log screen is not yet connected to a message-history API.\n\nSent and failed totals shown on Dashboard are local device counters. A full searchable log requires the server log endpoint and message records.")
         })
-        addDrawerItem("Settings", "⚙", {
-            openGatewaySettings()
+        addDrawerItem("Reports & Analytics", "▥", {
+            showPolicyDialog("Reports & Analytics", "Daily, weekly, monthly and yearly reporting needs timestamped SMS records from GatewayService or the server. The current local preference stores aggregate totals only, so period totals are not fabricated.")
+        })
+        addDrawerItem("GATEWAY", "▣", { showToast("Gateway options") })
+        addDrawerItem("Gateway Settings", "⚙", { openGatewaySettings() })
+        addDrawerItem("Start Gateway Service", "▶", { startGatewayService() })
+        addDrawerItem("Stop Gateway Service", "■", { stopGatewayService() })
+        addDrawerItem("Server & API Settings", "⇄", { openGatewaySettings() })
+        addDrawerItem("SMS Permissions", "♙", {
+            val granted = checkSelfPermission(Manifest.permission.SEND_SMS) == PackageManager.PERMISSION_GRANTED
+            showPolicyDialog("SMS Permission", if (granted) "SEND_SMS: Granted\nThe app can submit authorized outgoing SMS jobs." else "SEND_SMS: Not granted\nGrant permission to enable outgoing SMS.")
+            if (!granted) requestRequiredPermissions()
+        })
+        addDrawerItem("POLICIES & COMPLIANCE", "▤", { showToast("Policies and compliance") })
+        addDrawerItem("Privacy Policy", "🔒", { showPolicyDialog("Privacy Policy", privacyPolicyText()) })
+        addDrawerItem("Telecom & SMS Policy", "◉", { showPolicyDialog("Telecom & SMS Policy", telecomSmsPolicyText()) })
+        addDrawerItem("DND & Consent Policy", "✓", { showPolicyDialog("DND, Consent & Opt-out Rules", dndPolicyText()) })
+        addDrawerItem("Google Play Store Policy", "▶", { showPolicyDialog("Google Play Store Policy", playStorePolicyText()) })
+        addDrawerItem("Android Policy", "▣", { showPolicyDialog("Android App Permissions & Policy", androidPolicyText()) })
+        addDrawerItem("SYSTEM", "⌘", { showToast("System information") })
+        addDrawerItem("System Information", "ⓘ", {
+            val pm = packageManager
+            val version = try { pm.getPackageInfo(packageName, 0).versionName ?: "Unknown" } catch (_: Exception) { "Unknown" }
+            showPolicyDialog("System Information", "App: SS MediaOS SMS Gateway\nVersion: $version\nAndroid: ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})\nDevice: ${Build.MANUFACTURER} ${Build.MODEL}\nSMS permission: ${if (checkSelfPermission(Manifest.permission.SEND_SMS) == PackageManager.PERMISSION_GRANTED) "Granted" else "Not granted"}\nServer: ${SecureConfig.getServerUrl(this) ?: "Not configured"}")
         })
         addDrawerItem("About", "ⓘ", {
-            showPolicyDialog(
-                "About SS MediaOS SMS Gateway",
-                "SS MediaOS SMS Gateway\nSecure, organization-linked SMS delivery through an authorized device and selected active SIM.\n\nThe app processes server-authorized jobs only."
-            )
+            showPolicyDialog("About SS MediaOS SMS Gateway", "SS MediaOS SMS Gateway\nSecure, organization-linked SMS delivery through an authorized device and selected active SIM.\n\nDeveloped by Shivam Yadav.\n\nThe app processes server-authorized jobs only.")
         })
 
         val spacer = View(this)
@@ -867,6 +634,31 @@ DND, Consent & Opt-out Rules
 • If consent, category, sender registration or eligibility cannot be verified by the API, the server should reject the job rather than send it.
 
 These are safety/compliance principles, not a substitute for checking the latest official TRAI and telecom-provider requirements for your exact SMS category before launch.
+    """.trimIndent()
+
+    private fun playStorePolicyText(): String = """
+Google Play Store & App Distribution Policy
+
+• Request only permissions essential to the app's disclosed core functionality.
+• Explain the SEND_SMS use clearly in the store listing and in-app disclosure. Do not request SMS permissions for unrelated features.
+• Do not read or collect incoming SMS/OTP inbox data. This app build is designed for outgoing SMS jobs and does not declare READ_SMS or RECEIVE_SMS in the manifest previously reviewed.
+• Provide an accurate privacy policy, data-safety disclosures, support contact and account/data deletion information where applicable.
+• Do not claim Play approval or policy compliance until the final manifest, app behavior, Data safety form and Play Console declarations have been reviewed against current Google requirements.
+
+This is an implementation checklist, not a statement that Google Play has approved the app.
+    """.trimIndent()
+
+    private fun androidPolicyText(): String = """
+Android Permissions & Platform Policy
+
+• SEND_SMS is a sensitive permission. It must be requested at runtime and used only for the app's disclosed outgoing-SMS feature.
+• POST_NOTIFICATIONS is requested on Android 13+ for visible notifications where required.
+• Do not add READ_SMS, RECEIVE_SMS, call-log, contacts or location permissions unless a separate legitimate feature requires them and the applicable platform/store rules permit them.
+• Keep gateway work visible through the appropriate foreground-service notification and comply with Android foreground-service type and start restrictions for the target SDK.
+• Handle permission denial gracefully; never bypass Android permission controls.
+• Protect API keys, activation tokens and device tokens. Use HTTPS and avoid logging secrets.
+
+Review the final target SDK, manifest and service implementation before release; requirements can change between Android versions.
     """.trimIndent()
 
     private fun createStatCard(
