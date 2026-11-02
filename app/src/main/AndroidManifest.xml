@@ -1,26 +1,24 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- Secure server/API communication -->
+    <!-- Main Server / Client API communication (HTTPS only). -->
     <uses-permission android:name="android.permission.INTERNET" />
 
-    <!-- Sending SMS only -->
+    <!-- The Gateway sends SMS jobs assigned to its verified organization. -->
     <uses-permission android:name="android.permission.SEND_SMS" />
 
-    <!-- Required to read active SIM subscriptions for assigned-SIM selection. -->
+    <!-- Used only to inspect available SIM subscriptions for SIM selection.
+         This permission does not grant access to incoming SMS messages. -->
     <uses-permission android:name="android.permission.READ_PHONE_STATE" />
 
-    <!-- Notifications on Android 13+ -->
+    <!-- Android 13+ foreground-service notification. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
-    <!-- Foreground service -->
+    <!-- Foreground Gateway service. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
 
-    <!-- Foreground service type: dataSync -->
-    <uses-permission
-        android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
-
-    <!-- Telephony is useful but not required for installation -->
+    <!-- Telephony hardware is optional so devices without SIM support can install the app. -->
     <uses-feature
         android:name="android.hardware.telephony"
         android:required="false" />
@@ -35,36 +33,41 @@
         android:usesCleartextTraffic="false"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
 
-        <!-- Main Dashboard -->
+        <!-- Main Dashboard / Launcher. -->
         <activity
             android:name=".MainActivity"
             android:exported="true">
-
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-
         </activity>
 
-        <!-- Gateway Settings -->
+        <!-- Gateway Settings. -->
         <activity
             android:name=".GatewaySettingsActivity"
             android:label="Gateway Settings"
             android:exported="false" />
 
-        <!-- Gateway foreground service -->
+        <!-- Background SMS Gateway service. -->
         <service
             android:name=".GatewayService"
             android:exported="false"
             android:stopWithTask="false"
             android:foregroundServiceType="dataSync" />
 
-        <!-- Receives callbacks for SMS send results -->
+        <!-- Receives only this app's SMS-sent PendingIntent callbacks.
+             It does not receive or read incoming SMS messages. -->
         <receiver
             android:name=".SmsSentReceiver"
             android:exported="false" />
 
+        <!-- Intentionally no IncomingSmsReceiver. -->
     </application>
+
+    <!-- Intentionally omitted:
+         android.permission.READ_SMS
+         android.permission.RECEIVE_SMS
+         No incoming-SMS receiver is registered. -->
 
 </manifest>
