@@ -160,99 +160,106 @@ object ApiClient {
                 )
 
                 val httpStatus = response.optInt("_httpStatus", 200)
-                if (httpStatus !in 200..299 || !response.optBoolean("ok", false)) {
+                val topLevelSuccess = response.optBoolean(
+                    "success",
+                    response.optBoolean("ok", false)
+                )
+                if (httpStatus !in 200..299 || !topLevelSuccess) {
                     SecureConfig.clearOrganizationVerification(context)
                     throw IOException(
                         buildServerError(response, httpStatus, "GATEWAY_DIAGNOSTICS_FAILED")
                     )
                 }
 
-                // Diagnostics PASS alone is not organization verification.
-                // Require all mandatory checks and the authoritative Client
-                // Database organization record before saving verification.
-                val diagnosticData = response.optJSONObject("data") ?: response
-                val checks = response.optJSONObject("checks")
-                    ?: diagnosticData.optJSONObject("checks")
+                // Expected Main Server response:
+                // { "success": true, "data": {
+                //   "company_id": 1, "company_name": "...",
+                //   "institution_id": 1, "institution_name": "...",
+                //   "institution_code": "...", "registered_mobile_number": "...",
+                //   "mobile_updated": true, "verification_status": "VERIFIED"
+                // }}
+                val data = response.optJSONObject("data")
                     ?: throw IOException(
-                        "DIAGNOSTIC_CHECKS_MISSING: Main Server did not return diagnostic checks."
+                        "DIAGNOSTIC_DATA_MISSING: Main Server did not return the data object."
                     )
-                val requiredChecks = listOf(
-                    "main_server", "company_auth", "client_api_config",
-                    "client_api", "client_database", "institution"
-                )
-                val failedChecks = requiredChecks.filter { name ->
-                    checks.optJSONObject(name)?.optString("status", "UNKNOWN")
-                        ?.equals("PASS", ignoreCase = true) != true
-                }
-                if (failedChecks.isNotEmpty()) {
-                    SecureConfig.clearOrganizationVerification(context)
-                    throw IOException(
-                        "DIAGNOSTICS_INCOMPLETE: Required checks did not pass: ${failedChecks.joinToString(", ")}."
+
+                // If detailed diagnostic checks are included by an older server,
+                // continue enforcing them. The compact success/data contract above
+                // does not require a checks object.
+                val checks = response.optJSONObject("checks")
+                    ?: data.optJSONObject("checks")
+                if (checks != null) {
+                    val requiredChecks = listOf(
+                        "main_server", "company_auth", "client_api_config",
+                        "client_api", "client_database", "institution"
                     )
+                    val failedChecks = requiredChecks.filter { name ->
+                        checks.optJSONObject(name)?.optString("status", "UNKNOWN")
+                            ?.equals("PASS", ignoreCase = true) != true
+                    }
+                    if (failedChecks.isNotEmpty()) {
+                        SecureConfig.clearOrganizationVerification(context)
+                        throw IOException(
+                            "DIAGNOSTICS_INCOMPLETE: Required checks did not pass: ${failedChecks.joinToString(", ")}."
+                        )
+                    }
                 }
 
-                val data = diagnosticData
-                // Main Server currently returns a flat data object. Also accept
-                // the older nested organization object for backward compatibility.
-                val organization = data.optJSONObject("organization")
-                    ?: response.optJSONObject("organization")
-                    ?: data
+                // This response is FLAT inside data. Do not use organization_name
+                // as a company/institution substitute.
+                val companyId = firstNonBlank(data.optString("company_id"))
+                val companyName = firstNonBlank(data.optString("company_name"))
 
-                val returnedCode = firstNonBlank(
-                    organization.optString("organization_code"),
-                    organization.optString("institution_code"),
-                    organization.optString("hospital_code"),
-                    organization.optString("code")
-                ).uppercase()
-                val organizationId = firstNonBlank(
-                    organization.optString("organization_id"),
-                    organization.optString("institution_id"),
-                    organization.optString("hospital_id"),
-                    organization.optString("id")
+                val organizationId = firstNonBlank(data.optString("institution_id"))
+                val organizationName = firstNonBlank(data.optString("institution_name"))
+                val returnedCode = firstNonBlank(data.optString("institution_code")).uppercase()
+
+                val registeredMobile = normalizeMobile(
+                    firstNonBlank(data.optString("registered_mobile_number"))
                 )
-                val organizationName = firstNonBlank(
-                    organization.optString("organization_name"),
-                    organization.optString("institution_name"),
-                    organization.optString("hospital_name"),
-                    organization.optString("name")
-                )
-                val registeredMobile = normalizeMobile(firstNonBlank(
-                    organization.optString("mobile_number"),
-                    organization.optString("registered_mobile_number"),
-                    organization.optString("registered_mobile"),
-                    organization.optString("mobile")
-                ))
                 val organizationStatus = firstNonBlank(
-                    organization.optString("organization_status"),
-                    organization.optString("status"),
-                    organization.optString("verification_status")
+                    data.optString("verification_status"),
+                    "VERIFIED"
                 )
-                val serverVerified = data.optBoolean(
-                    "verified",
-                    data.optBoolean("success", response.optBoolean("verified", true))
-                ) && organizationStatus.equals("active", true).let { active ->
-                    active || organizationStatus.equals("verified", true)
-                }
+
+                val serverVerified = topLevelSuccess &&
+                    organizationStatus.equals("VERIFIED", ignoreCase = true)
 
                 if (!serverVerified) {
                     SecureConfig.clearOrganizationVerification(context)
-                    throw IOException("ORGANIZATION_NOT_VERIFIED: Main Server did not confirm a verified organization record.")
+                    throw IOException(
+                        "INSTITUTION_NOT_VERIFIED: Main Server did not return verification_status VERIFIED."
+                    )
                 }
-                if (returnedCode.isBlank() || returnedCode != code.uppercase()) {
+                if (companyId.isBlank() || companyName.isBlank()) {
                     SecureConfig.clearOrganizationVerification(context)
-                    throw IOException("ORGANIZATION_CODE_MISMATCH: Client Database Organization Code does not exactly match the entered code.")
+                    throw IOException(
+                        "COMPANY_DATA_INCOMPLETE: Main Server must return company_id and company_name."
+                    )
                 }
                 if (organizationId.isBlank() || organizationName.isBlank()) {
                     SecureConfig.clearOrganizationVerification(context)
-                    throw IOException("ORGANIZATION_DATA_INCOMPLETE: Client Database did not return Organization ID and Organization Name.")
+                    throw IOException(
+                        "INSTITUTION_DATA_INCOMPLETE: Main Server must return institution_id and institution_name."
+                    )
+                }
+                if (returnedCode.isBlank() || returnedCode != code.uppercase()) {
+                    SecureConfig.clearOrganizationVerification(context)
+                    throw IOException(
+                        "INSTITUTION_CODE_MISMATCH: Returned institution_code does not match the entered code."
+                    )
                 }
                 if (registeredMobile.length !in 8..15) {
                     SecureConfig.clearOrganizationVerification(context)
-                    throw IOException("REGISTERED_MOBILE_MISSING: Client Database did not return a valid registered mobile number.")
+                    throw IOException(
+                        "REGISTERED_MOBILE_MISSING: Main Server must return the actual registered_mobile_number."
+                    )
                 }
                 if (normalizeMobile(mobile) != registeredMobile) {
                     SecureConfig.clearOrganizationVerification(context)
-                    throw IOException("REGISTERED_MOBILE_MISMATCH: Entered mobile number does not match the Client Database registered mobile.")
+                    throw IOException(
+                        "REGISTERED_MOBILE_MISMATCH: Returned mobile number does not match the number submitted by the app."
+                    )
                 }
 
                 if (!SecureConfig.saveVerifiedOrganization(
@@ -261,10 +268,14 @@ object ApiClient {
                     organizationName = organizationName,
                     organizationCode = returnedCode,
                     registeredMobile = registeredMobile,
-                    organizationStatus = organizationStatus
+                    organizationStatus = organizationStatus,
+                    companyId = companyId,
+                    companyName = companyName
                 )) {
                     SecureConfig.clearOrganizationVerification(context)
-                    throw IOException("ORGANIZATION_SAVE_FAILED: Verified organization details could not be saved.")
+                    throw IOException(
+                        "INSTITUTION_SAVE_FAILED: Verified Company and Institution details could not be saved."
+                    )
                 }
 
                 response
@@ -305,26 +316,9 @@ object ApiClient {
                         "COMPANY_API_KEY_REQUIRED: Enter the Company API Key."
                     )
 
-                // Activation must be tied to the Institution already verified
-                // by the Main Server. Do not accept a manually typed institution ID.
-                if (!SecureConfig.isOrganizationVerified(context)) {
-                    throw IOException(
-                        "ORGANIZATION_NOT_VERIFIED: Verify the institution before activating the device."
-                    )
-                }
-
-                val institutionId = SecureConfig
-                    .getOrganizationId(context)
-                    .trim()
-                    .toLongOrNull()
-                    ?: throw IOException(
-                        "INSTITUTION_ID_MISSING: Main Server did not save a valid Institution ID."
-                    )
-
                 val body = JSONObject()
                     .put("deviceCode", deviceCode)
                     .put("companyApiKey", companyApiKey)
-                    .put("institutionId", institutionId)
 
                 val response = request(
                     endpoint = buildEndpoint(
