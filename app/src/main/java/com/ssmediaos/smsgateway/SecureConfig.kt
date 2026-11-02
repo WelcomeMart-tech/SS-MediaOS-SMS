@@ -30,6 +30,14 @@ object SecureConfig {
     private const val KEY_ORGANIZATION_STATUS = "organization_status"
     private const val KEY_ORGANIZATION_VERIFIED = "organization_verified"
 
+    // Authoritative company identity returned by Main Server.
+    private const val KEY_COMPANY_ID = "company_id"
+    private const val KEY_COMPANY_NAME = "company_name"
+
+    // Bind the verification to the SIM selected at verification time.
+    private const val KEY_VERIFIED_SIM_SUBSCRIPTION_ID =
+        "verified_sim_subscription_id"
+
     private const val KEY_SELECTED_SIM_SUBSCRIPTION_ID =
         "selected_sim_subscription_id"
 
@@ -112,6 +120,12 @@ object SecureConfig {
     fun getDeviceToken(context: Context): String? =
         readSecret(context, KEY_DEVICE_TOKEN)
 
+    fun getCompanyId(context: Context): String =
+        preferences(context).getString(KEY_COMPANY_ID, "").orEmpty()
+
+    fun getCompanyName(context: Context): String =
+        preferences(context).getString(KEY_COMPANY_NAME, "").orEmpty()
+
 
     /**
      * Save activation credentials securely.
@@ -156,6 +170,13 @@ object SecureConfig {
 
         if (oldToken != activationToken) {
             editor.remove(KEY_DEVICE_TOKEN)
+                .putBoolean(KEY_ORGANIZATION_VERIFIED, false)
+                .remove(KEY_ORGANIZATION_NAME)
+                .remove(KEY_ORGANIZATION_ID)
+                .remove(KEY_ORGANIZATION_STATUS)
+                .remove(KEY_COMPANY_ID)
+                .remove(KEY_COMPANY_NAME)
+                .remove(KEY_VERIFIED_SIM_SUBSCRIPTION_ID)
         }
 
         return editor.commit()
@@ -205,6 +226,9 @@ object SecureConfig {
                 .remove(KEY_ORGANIZATION_NAME)
                 .remove(KEY_ORGANIZATION_ID)
                 .remove(KEY_ORGANIZATION_STATUS)
+                .remove(KEY_COMPANY_ID)
+                .remove(KEY_COMPANY_NAME)
+                .remove(KEY_VERIFIED_SIM_SUBSCRIPTION_ID)
                 .remove(KEY_DEVICE_TOKEN)
         }
         return editor.commit()
@@ -227,7 +251,10 @@ object SecureConfig {
 
     fun isOrganizationVerified(context: Context): Boolean {
         val prefs = preferences(context)
+        val selectedSim = getSelectedSimSubscriptionId(context) ?: return false
+        val verifiedSim = prefs.getInt(KEY_VERIFIED_SIM_SUBSCRIPTION_ID, -1)
         return prefs.getBoolean(KEY_ORGANIZATION_VERIFIED, false) &&
+            verifiedSim >= 0 && verifiedSim == selectedSim &&
             prefs.getString(KEY_ORGANIZATION_CODE, "").orEmpty().isNotBlank() &&
             prefs.getString(KEY_ORGANIZATION_ID, "").orEmpty().isNotBlank() &&
             prefs.getString(KEY_ORGANIZATION_NAME, "").orEmpty().isNotBlank() &&
@@ -248,7 +275,10 @@ object SecureConfig {
         organizationName: String,
         organizationCode: String,
         registeredMobile: String,
-        organizationStatus: String
+        organizationStatus: String,
+        companyId: String = "",
+        companyName: String = "",
+        verifiedSimSubscriptionId: Int? = getSelectedSimSubscriptionId(context)
     ): Boolean {
         val id = organizationId.trim()
         val name = organizationName.trim()
@@ -257,7 +287,7 @@ object SecureConfig {
         val status = organizationStatus.trim()
 
         if (id.isBlank() || name.isBlank() || code.isBlank() ||
-            mobile.length !in 8..15 ||
+            mobile.length !in 8..15 || verifiedSimSubscriptionId == null || verifiedSimSubscriptionId < 0 ||
             !(status.equals("active", true) || status.equals("verified", true))) {
             clearOrganizationVerification(context)
             return false
@@ -273,8 +303,11 @@ object SecureConfig {
             .putString(KEY_ORGANIZATION_CODE, code)
             .putString(KEY_REGISTERED_MOBILE, mobile)
             .putString(KEY_ORGANIZATION_STATUS, if (status.equals("verified", true)) "Verified" else "Active")
+            .putInt(KEY_VERIFIED_SIM_SUBSCRIPTION_ID, verifiedSimSubscriptionId)
             .putBoolean(KEY_ORGANIZATION_VERIFIED, true)
 
+        if (companyId.isNotBlank()) editor.putString(KEY_COMPANY_ID, companyId.trim())
+        if (companyName.isNotBlank()) editor.putString(KEY_COMPANY_NAME, companyName.trim())
         if (identityChanged) editor.remove(KEY_DEVICE_TOKEN)
         return editor.commit()
     }
@@ -310,6 +343,9 @@ object SecureConfig {
             .remove(KEY_ORGANIZATION_NAME)
             .remove(KEY_ORGANIZATION_ID)
             .remove(KEY_ORGANIZATION_STATUS)
+            .remove(KEY_COMPANY_ID)
+            .remove(KEY_COMPANY_NAME)
+            .remove(KEY_VERIFIED_SIM_SUBSCRIPTION_ID)
             .remove(KEY_DEVICE_TOKEN)
             .commit()
 
@@ -334,13 +370,22 @@ object SecureConfig {
             return false
         }
 
-        return preferences(context)
-            .edit()
-            .putInt(
-                KEY_SELECTED_SIM_SUBSCRIPTION_ID,
-                subscriptionId
-            )
-            .commit()
+        val prefs = preferences(context)
+        val previous = prefs.getInt(KEY_SELECTED_SIM_SUBSCRIPTION_ID, -1)
+        val editor = prefs.edit()
+            .putInt(KEY_SELECTED_SIM_SUBSCRIPTION_ID, subscriptionId)
+
+        if (previous != subscriptionId) {
+            editor.putBoolean(KEY_ORGANIZATION_VERIFIED, false)
+                .remove(KEY_ORGANIZATION_NAME)
+                .remove(KEY_ORGANIZATION_ID)
+                .remove(KEY_ORGANIZATION_STATUS)
+                .remove(KEY_COMPANY_ID)
+                .remove(KEY_COMPANY_NAME)
+                .remove(KEY_VERIFIED_SIM_SUBSCRIPTION_ID)
+                .remove(KEY_DEVICE_TOKEN)
+        }
+        return editor.commit()
     }
 
 
@@ -351,6 +396,14 @@ object SecureConfig {
         return preferences(context)
             .edit()
             .remove(KEY_SELECTED_SIM_SUBSCRIPTION_ID)
+            .putBoolean(KEY_ORGANIZATION_VERIFIED, false)
+            .remove(KEY_ORGANIZATION_NAME)
+            .remove(KEY_ORGANIZATION_ID)
+            .remove(KEY_ORGANIZATION_STATUS)
+            .remove(KEY_COMPANY_ID)
+            .remove(KEY_COMPANY_NAME)
+            .remove(KEY_VERIFIED_SIM_SUBSCRIPTION_ID)
+            .remove(KEY_DEVICE_TOKEN)
             .commit()
     }
 
@@ -454,6 +507,13 @@ object SecureConfig {
 
         if (oldToken != value) {
             editor.remove(KEY_DEVICE_TOKEN)
+                .putBoolean(KEY_ORGANIZATION_VERIFIED, false)
+                .remove(KEY_ORGANIZATION_NAME)
+                .remove(KEY_ORGANIZATION_ID)
+                .remove(KEY_ORGANIZATION_STATUS)
+                .remove(KEY_COMPANY_ID)
+                .remove(KEY_COMPANY_NAME)
+                .remove(KEY_VERIFIED_SIM_SUBSCRIPTION_ID)
         }
 
         return editor.commit()
