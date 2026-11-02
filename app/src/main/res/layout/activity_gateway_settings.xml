@@ -2,254 +2,320 @@
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:fillViewport="true"
+    android:background="#F3F6FC"
     android:clipToPadding="false"
-    android:background="#F4F7FC">
+    android:fillViewport="true"
+    android:padding="0dp">
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="vertical"
-        android:padding="20dp">
+        android:paddingStart="18dp"
+        android:paddingTop="22dp"
+        android:paddingEnd="18dp"
+        android:paddingBottom="28dp">
 
+        <!-- Header -->
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="SS MediaOS SMS Gateway"
-            android:textColor="#101B35"
-            android:textSize="25sp"
+            android:text="Gateway Settings"
+            android:textColor="#10213D"
+            android:textSize="26sp"
             android:textStyle="bold" />
 
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="6dp"
-            android:layout_marginBottom="20dp"
-            android:text="Manage your secure gateway connection"
+            android:layout_marginTop="5dp"
+            android:layout_marginBottom="18dp"
+            android:text="Securely manage your organization and gateway connection"
             android:textColor="#64748B"
-            android:textSize="14sp" />
+            android:textSize="13sp" />
 
+        <!-- Hidden internal configuration values required by Activity -->
+        <EditText
+            android:id="@+id/serverUrlInput"
+            android:layout_width="1dp"
+            android:layout_height="1dp"
+            android:visibility="gone"
+            android:importantForAutofill="no"
+            android:inputType="textUri"
+            android:singleLine="true" />
+
+        <EditText
+            android:id="@+id/deviceIdInput"
+            android:layout_width="1dp"
+            android:layout_height="1dp"
+            android:visibility="gone"
+            android:importantForAutofill="no"
+            android:inputType="text"
+            android:singleLine="true"
+            android:enabled="false"
+            android:focusable="false" />
+
+        <!-- Organization identity card -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="vertical"
-            android:padding="20dp"
-            android:background="#FFFFFF">
+            android:padding="18dp"
+            android:background="#FFFFFF"
+            android:elevation="2dp">
 
-            <!-- Internal fields: retained for Kotlin compatibility, hidden from users. -->
-            <EditText
-                android:id="@+id/serverUrlInput"
-                android:layout_width="1dp"
-                android:layout_height="1dp"
-                android:visibility="gone"
-                android:importantForAutofill="no"
-                android:inputType="textUri"
-                android:singleLine="true" />
-
-            <EditText
-                android:id="@+id/deviceIdInput"
-                android:layout_width="1dp"
-                android:layout_height="1dp"
-                android:visibility="gone"
-                android:importantForAutofill="no"
-                android:inputType="text"
-                android:singleLine="true"
-                android:enabled="false"
-                android:focusable="false" />
-
-            <!-- Company API Key -->
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
+                android:text="VERIFIED ORGANIZATION"
+                android:textColor="#2563EB"
+                android:textSize="11sp"
+                android:letterSpacing="0.08"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/organizationNameText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="13dp"
+                android:text="Organization Name: Not verified"
+                android:textColor="#14233D"
+                android:textSize="19sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/organizationIdText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:background="#F5F8FE"
+                android:padding="13dp"
+                android:text="Organization ID: Not verified"
+                android:textColor="#334155"
+                android:textSize="14sp" />
+
+            <TextView
+                android:id="@+id/organizationCodeText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="7dp"
+                android:background="#F5F8FE"
+                android:padding="13dp"
+                android:text="Organization Code: Not verified"
+                android:textColor="#334155"
+                android:textSize="14sp" />
+
+            <TextView
+                android:id="@+id/organizationMobileText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="7dp"
+                android:background="#F5F8FE"
+                android:padding="13dp"
+                android:text="Registered Mobile Number: Not verified"
+                android:textColor="#334155"
+                android:textSize="14sp" />
+
+            <TextView
+                android:id="@+id/organizationStatusText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:background="#FFF7E8"
+                android:padding="13dp"
+                android:text="Organization Status: PENDING"
+                android:textColor="#9A5B08"
+                android:textSize="13sp"
+                android:textStyle="bold" />
+        </LinearLayout>
+
+        <!-- Credentials and verification -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:orientation="vertical"
+            android:padding="18dp"
+            android:background="#FFFFFF"
+            android:elevation="2dp">
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Server Authentication"
+                android:textColor="#14233D"
+                android:textSize="17sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="15dp"
                 android:text="Company API Key"
-                android:textColor="#1E293B"
-                android:textSize="15sp"
+                android:textColor="#334155"
+                android:textSize="13sp"
                 android:textStyle="bold" />
 
             <EditText
                 android:id="@+id/apiTokenInput"
                 android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
+                android:layout_height="52dp"
+                android:layout_marginTop="6dp"
+                android:background="#F5F8FE"
                 android:hint="Enter Company API Key"
                 android:inputType="textPassword"
+                android:paddingStart="13dp"
+                android:paddingEnd="13dp"
                 android:singleLine="true"
                 android:autofillHints="password" />
 
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="6dp"
-                android:text="Your API key is masked on screen."
-                android:textColor="#64748B"
-                android:textSize="12sp" />
-
-            <!-- Organization Code -->
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="20dp"
+                android:layout_marginTop="14dp"
                 android:text="Organization Code"
-                android:textColor="#1E293B"
-                android:textSize="15sp"
+                android:textColor="#334155"
+                android:textSize="13sp"
                 android:textStyle="bold" />
 
             <EditText
                 android:id="@+id/organizationCodeInput"
                 android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
+                android:layout_height="52dp"
+                android:layout_marginTop="6dp"
+                android:background="#F5F8FE"
                 android:hint="Enter Organization Code"
                 android:inputType="textCapCharacters"
+                android:paddingStart="13dp"
+                android:paddingEnd="13dp"
                 android:singleLine="true"
                 android:importantForAutofill="no" />
 
-            <!-- Registered Mobile -->
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="20dp"
+                android:layout_marginTop="14dp"
                 android:text="Registered Mobile Number"
-                android:textColor="#1E293B"
-                android:textSize="15sp"
+                android:textColor="#334155"
+                android:textSize="13sp"
                 android:textStyle="bold" />
 
             <EditText
                 android:id="@+id/registeredMobileInput"
                 android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
+                android:layout_height="52dp"
+                android:layout_marginTop="6dp"
+                android:background="#F5F8FE"
                 android:hint="Enter registered mobile number"
                 android:inputType="phone"
+                android:paddingStart="13dp"
+                android:paddingEnd="13dp"
                 android:singleLine="true"
                 android:autofillHints="phone" />
 
-            <!-- Verify organization and mobile -->
             <Button
                 android:id="@+id/verifyMobileButton"
                 android:layout_width="match_parent"
                 android:layout_height="52dp"
-                android:layout_marginTop="14dp"
-                android:text="Verify Organization &amp; Mobile"
-                android:textAllCaps="false" />
-
-            <!-- Organization name -->
-            <TextView
-                android:id="@+id/organizationNameText"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
                 android:layout_marginTop="16dp"
-                android:background="#F8FAFC"
-                android:padding="12dp"
-                android:text="Organization Name: Not verified"
-                android:textColor="#334155"
-                android:textSize="14sp" />
-
-            <!-- Verification status -->
-            <TextView
-                android:id="@+id/organizationStatusText"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:background="#FFF7ED"
-                android:padding="12dp"
-                android:text="Organization Verification: PENDING"
-                android:textColor="#9A3412"
-                android:textSize="14sp"
-                android:textStyle="bold" />
-
-            <!-- Assigned SIM selector; GatewaySettingsActivity must populate and handle this Spinner. -->
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="20dp"
-                android:text="Assigned SIM"
-                android:textColor="#1E293B"
-                android:textSize="15sp"
-                android:textStyle="bold" />
-
-            <Spinner
-                android:id="@+id/simSelectionSpinner"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:contentDescription="Select the assigned SIM for this gateway" />
-
-            <!-- SIM status -->
-            <TextView
-                android:id="@+id/simStatusText"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:background="#F1F5F9"
-                android:padding="12dp"
-                android:text="SIM status: Not checked"
-                android:textColor="#475569"
-                android:textSize="14sp" />
-
-            <!-- Save -->
-            <Button
-                android:id="@+id/saveSettingsButton"
-                android:layout_width="match_parent"
-                android:layout_height="52dp"
-                android:layout_marginTop="24dp"
-                android:text="Save Settings"
-                android:textAllCaps="false" />
-
-            <!-- Test connection -->
-            <Button
-                android:id="@+id/testConnectionButton"
-                android:layout_width="match_parent"
-                android:layout_height="52dp"
-                android:layout_marginTop="10dp"
-                android:text="Test Server Connection"
-                android:textAllCaps="false" />
-
-            <!-- Activate device -->
-            <Button
-                android:id="@+id/activateDeviceButton"
-                android:layout_width="match_parent"
-                android:layout_height="54dp"
-                android:layout_marginTop="10dp"
-                android:backgroundTint="#0F766E"
-                android:text="Verify/Connect Device"
+                android:backgroundTint="#2563EB"
+                android:text="Verify Organization &amp; Mobile"
                 android:textAllCaps="false"
                 android:textColor="#FFFFFF"
                 android:textStyle="bold" />
 
-            <!-- Connection status -->
+            <Button
+                android:id="@+id/saveSettingsButton"
+                android:layout_width="match_parent"
+                android:layout_height="50dp"
+                android:layout_marginTop="9dp"
+                android:backgroundTint="#E8EFFB"
+                android:text="Save Settings"
+                android:textAllCaps="false"
+                android:textColor="#1D4ED8" />
+        </LinearLayout>
+
+        <!-- SIM information -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:orientation="vertical"
+            android:padding="18dp"
+            android:background="#FFFFFF"
+            android:elevation="2dp">
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="SIM &amp; Gateway Status"
+                android:textColor="#14233D"
+                android:textSize="17sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/simStatusText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:background="#F5F8FE"
+                android:padding="13dp"
+                android:text="SIM status: Not checked"
+                android:textColor="#475569"
+                android:textSize="13sp" />
+
+            <Button
+                android:id="@+id/testConnectionButton"
+                android:layout_width="match_parent"
+                android:layout_height="50dp"
+                android:layout_marginTop="13dp"
+                android:backgroundTint="#E8EFFB"
+                android:text="Test Server Connection"
+                android:textAllCaps="false"
+                android:textColor="#1D4ED8" />
+
+            <Button
+                android:id="@+id/activateDeviceButton"
+                android:layout_width="match_parent"
+                android:layout_height="54dp"
+                android:layout_marginTop="9dp"
+                android:backgroundTint="#0F766E"
+                android:text="Verify / Connect Device"
+                android:textAllCaps="false"
+                android:textColor="#FFFFFF"
+                android:textStyle="bold" />
+
             <TextView
                 android:id="@+id/connectionStatusText"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="18dp"
+                android:layout_marginTop="14dp"
+                android:background="#F5F8FE"
+                android:padding="13dp"
                 android:text="Connection status: Not tested"
-                android:textColor="#64748B"
-                android:textSize="14sp" />
+                android:textColor="#475569"
+                android:textSize="13sp" />
 
-            <!-- Device activation status -->
             <TextView
                 android:id="@+id/activationStatusText"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="10dp"
-                android:background="#F1F5F9"
-                android:padding="12dp"
+                android:layout_marginTop="8dp"
+                android:background="#FFF7E8"
+                android:padding="13dp"
                 android:text="Device status: NOT ACTIVATED"
-                android:textColor="#B45309"
-                android:textSize="14sp"
+                android:textColor="#9A5B08"
+                android:textSize="13sp"
                 android:textStyle="bold" />
-
         </LinearLayout>
 
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="18dp"
+            android:layout_marginTop="20dp"
             android:gravity="center"
-            android:text="SS MediaOS"
-            android:textColor="#64748B"
+            android:text="SS MediaOS  •  Secure SMS Gateway"
+            android:textColor="#94A3B8"
             android:textSize="12sp" />
-
     </LinearLayout>
 </ScrollView>
