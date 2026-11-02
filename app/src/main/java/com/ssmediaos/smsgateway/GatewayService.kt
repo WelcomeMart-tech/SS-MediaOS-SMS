@@ -282,11 +282,7 @@ class GatewayService : Service() {
             return
         }
 
-        if (
-            !SecureConfig.isOrganizationVerified(this) ||
-            SecureConfig.getOrganizationCode(this).isBlank() ||
-            SecureConfig.getRegisteredMobile(this).isBlank()
-        ) {
+        if (!SecureConfig.isOrganizationVerified(this)) {
             Log.w(TAG, "Gateway start blocked: organization/mobile is not verified")
 
             saveServiceRunning(false)
@@ -475,36 +471,50 @@ class GatewayService : Service() {
             return
         }
 
-        // Organization isolation: never send a job unless the server explicitly
-        // tags it with the exact organization code verified on this device.
-        // Do not infer ownership from a phone number, company name, or device ID.
-        val verifiedOrganizationCode =
-            SecureConfig.getOrganizationCode(this).trim()
-
-        val jobOrganizationCode =
-            job.optString("organization_code", "").trim()
-
-        if (
-            verifiedOrganizationCode.isBlank() ||
-            jobOrganizationCode.isBlank() ||
-            !jobOrganizationCode.equals(verifiedOrganizationCode, ignoreCase = false)
-        ) {
-            Log.e(
-                TAG,
-                "SMS job blocked: organization code mismatch or missing. " +
-                    "verifiedCodePresent=${verifiedOrganizationCode.isNotBlank()}, " +
-                    "jobCodePresent=${jobOrganizationCode.isNotBlank()}"
-            )
-            requestInProgress = false
-            updateStatus("SMS blocked: job does not belong to this verified organization")
-            setServerState(STATE_FAILED)
-            return
-        }
-
         val jobId = job.optLong("id", 0L)
         val requestId = job.optString("request_id", "").orEmpty().trim()
         val phoneNumber = job.optString("to", "").orEmpty().trim()
         val message = job.optString("message", "").orEmpty()
+
+        // Defense-in-depth organization isolation:
+        // every queued job must explicitly identify the organization it belongs to.
+        // Missing or different organization codes are never sent from this device.
+        val verifiedOrganizationCode = SecureConfig
+            .getOrganizationCode(this)
+            .trim()
+
+        val jobOrganizationCode = sequenceOf(
+            job.optString("organization_code", ""),
+            job.optString("organizationCode", ""),
+            job.optString("institution_code", ""),
+            job.optString("institutionCode", "")
+        ).map { it.trim() }.firstOrNull { it.isNotBlank() }.orEmpty()
+
+        if (
+            verifiedOrganizationCode.isBlank() ||
+            jobOrganizationCode.isBlank() ||
+            !verifiedOrganizationCode.equals(jobOrganizationCode, ignoreCase = true)
+        ) {
+            Log.e(
+                TAG,
+                "SMS job blocked: organization code missing or does not match verified organization"
+            )
+            requestInProgress = false
+            updateStatus("SMS blocked: job does not belong to this verified organization")
+
+            if (
+                jobId > 0L &&
+                requestId.matches(Regex("^[a-f0-9]{32}$"))
+            ) {
+                reportResult(
+                    jobId = jobId,
+                    requestId = requestId,
+                    success = false,
+                    errorCode = "ORGANIZATION_CODE_MISMATCH"
+                )
+            }
+            return
+        }
 
         if (
             jobId <= 0L ||
