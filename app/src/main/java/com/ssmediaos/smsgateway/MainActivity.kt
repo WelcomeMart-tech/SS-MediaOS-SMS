@@ -489,9 +489,15 @@ class MainActivity : Activity() {
         addDrawerItem("Stop Gateway Service", "■", { stopGatewayService() })
         addDrawerItem("Server & API Settings", "⇄", { openGatewaySettings() })
         addDrawerItem("SMS Permissions", "♙", {
-            val granted = checkSelfPermission(Manifest.permission.SEND_SMS) == PackageManager.PERMISSION_GRANTED
-            showPolicyDialog("SMS Permission", if (granted) "SEND_SMS: Granted\nThe app can submit authorized outgoing SMS jobs." else "SEND_SMS: Not granted\nGrant permission to enable outgoing SMS.")
-            if (!granted) requestRequiredPermissions()
+            val sendGranted = checkSelfPermission(Manifest.permission.SEND_SMS) == PackageManager.PERMISSION_GRANTED
+            val phoneGranted = checkSelfPermission(Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED
+            val details = "SEND_SMS: ${if (sendGranted) "Granted" else "Not granted"}\n" +
+                "READ_PHONE_STATE: ${if (phoneGranted) "Granted" else "Not granted"}\n\n" +
+                "SEND_SMS is required to send authorized outgoing messages. " +
+                "READ_PHONE_STATE is used to inspect the selected SIM/subscription for multi-SIM routing. " +
+                "Incoming SMS and inbox access are not enabled."
+            showPolicyDialog("SMS Permissions", details)
+            if (!sendGranted || !phoneGranted) requestRequiredPermissions()
         })
         addDrawerItem("POLICIES & COMPLIANCE", "▤", { showToast("Policies and compliance") })
         addDrawerItem("Privacy Policy", "🔒", { showPolicyDialog("Privacy Policy", privacyPolicyText()) })
@@ -815,8 +821,11 @@ Review the final target SDK, manifest and service implementation before release;
     }
 
     private fun requestRequiredPermissions() {
+        // SmsHelper requires both permissions: SEND_SMS for outbound messages
+        // and READ_PHONE_STATE to inspect the explicitly selected SIM.
         val required = mutableListOf(
-            Manifest.permission.SEND_SMS
+            Manifest.permission.SEND_SMS,
+            Manifest.permission.READ_PHONE_STATE
         )
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -835,13 +844,35 @@ Review the final target SDK, manifest and service implementation before release;
         }
     }
 
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == PERMISSION_REQUEST_CODE) {
+            updateStatus()
+            val sendGranted = checkSelfPermission(Manifest.permission.SEND_SMS) == PackageManager.PERMISSION_GRANTED
+            val phoneGranted = checkSelfPermission(Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED
+            if (sendGranted && phoneGranted) {
+                showToast("Required SMS and SIM permissions granted.")
+            } else {
+                showToast("Gateway needs both SMS and SIM permissions. You can grant them in Android App Settings.")
+            }
+        }
+    }
+
     private fun startGatewayService() {
         val smsGranted =
             checkSelfPermission(Manifest.permission.SEND_SMS) ==
                 PackageManager.PERMISSION_GRANTED
 
-        if (!smsGranted) {
-            updateStatus("Please grant SMS permission first.")
+        val phoneStateGranted =
+            checkSelfPermission(Manifest.permission.READ_PHONE_STATE) ==
+                PackageManager.PERMISSION_GRANTED
+
+        if (!smsGranted || !phoneStateGranted) {
+            updateStatus("Grant SMS and Phone State permissions before starting the gateway.")
             requestRequiredPermissions()
             return
         }
@@ -1042,20 +1073,21 @@ Review the final target SDK, manifest and service implementation before release;
         serverText.text =
             "Server: ${serverUrl ?: "Not configured"}"
 
-        permissionText.text = if (smsGranted) {
-            "SMS Permission: Granted"
+        val phoneStateGranted = checkSelfPermission(Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED
+        permissionText.text = if (smsGranted && phoneStateGranted) {
+            "SMS & SIM Permission: Granted"
         } else {
-            "SMS Permission: Not granted"
+            "Required permission missing"
         }
 
         statusText.text = buildString {
             appendLine("App Status: Running")
 
             appendLine(
-                if (smsGranted) {
-                    "SMS sending permission is granted."
+                if (smsGranted && phoneStateGranted) {
+                    "SMS sending and SIM inspection permissions are granted."
                 } else {
-                    "SMS sending permission is required."
+                    "Grant SEND_SMS and READ_PHONE_STATE permissions before starting the gateway."
                 }
             )
 
@@ -1091,7 +1123,7 @@ Review the final target SDK, manifest and service implementation before release;
             "value_SMS_PERMISSION"
         )
 
-        permissionValue?.text = if (smsGranted) {
+        permissionValue?.text = if (smsGranted && phoneStateGranted) {
             "GRANTED"
         } else {
             "NOT GRANTED"
@@ -1107,10 +1139,10 @@ Review the final target SDK, manifest and service implementation before release;
             )
 
             appendLine(
-                if (smsGranted) {
-                    "SMS permission is available."
+                if (smsGranted && phoneStateGranted) {
+                    "SMS and SIM permissions are available."
                 } else {
-                    "Grant SMS permission before starting the gateway."
+                    "Grant SEND_SMS and READ_PHONE_STATE before starting the gateway."
                 }
             )
 
