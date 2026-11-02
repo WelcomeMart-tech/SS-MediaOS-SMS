@@ -168,16 +168,14 @@ object ApiClient {
                 }
 
                 // Diagnostics PASS alone is not organization verification.
-                // Main Server response is: { ok, checks, data: { company_*, institution_*, ... } }.
-                // Keep Company and Institution objects separate: organization_name is
-                // the parent Company name in this API, NOT the Institution name.
-                val data = response.optJSONObject("data") ?: response
+                // Require all mandatory checks and the authoritative Client
+                // Database organization record before saving verification.
+                val diagnosticData = response.optJSONObject("data") ?: response
                 val checks = response.optJSONObject("checks")
-                    ?: data.optJSONObject("checks")
+                    ?: diagnosticData.optJSONObject("checks")
                     ?: throw IOException(
                         "DIAGNOSTIC_CHECKS_MISSING: Main Server did not return diagnostic checks."
                     )
-
                 val requiredChecks = listOf(
                     "main_server", "company_auth", "client_api_config",
                     "client_api", "client_database", "institution"
@@ -193,136 +191,80 @@ object ApiClient {
                     )
                 }
 
-                val institution = data.optJSONObject("institution")
-                    ?: data.optJSONObject("hospital")
-                    ?: data.optJSONObject("organization")
-                    ?: response.optJSONObject("institution")
-                    ?: response.optJSONObject("hospital")
+                val data = diagnosticData
+                // Main Server currently returns a flat data object. Also accept
+                // the older nested organization object for backward compatibility.
+                val organization = data.optJSONObject("organization")
                     ?: response.optJSONObject("organization")
                     ?: data
-                val company = data.optJSONObject("company")
-                    ?: response.optJSONObject("company")
-                    ?: JSONObject()
 
-                // Exact Institution fields have priority. Never use organization_name
-                // as Institution Name because it represents the parent Company.
                 val returnedCode = firstNonBlank(
-                    data.optString("institution_code"),
-                    data.optString("hospital_code"),
-                    institution.optString("institution_code"),
-                    institution.optString("hospital_code"),
-                    institution.optString("organization_code"),
-                    institution.optString("code")
+                    organization.optString("organization_code"),
+                    organization.optString("institution_code"),
+                    organization.optString("hospital_code"),
+                    organization.optString("code")
                 ).uppercase()
-                val institutionId = firstNonBlank(
-                    data.optString("institution_id"),
-                    data.optString("hospital_id"),
-                    institution.optString("institution_id"),
-                    institution.optString("hospital_id"),
-                    institution.optString("id")
+                val organizationId = firstNonBlank(
+                    organization.optString("organization_id"),
+                    organization.optString("institution_id"),
+                    organization.optString("hospital_id"),
+                    organization.optString("id")
                 )
-                val institutionName = firstNonBlank(
-                    data.optString("institution_name"),
-                    data.optString("hospital_name"),
-                    institution.optString("institution_name"),
-                    institution.optString("hospital_name"),
-                    institution.optString("name")
+                val organizationName = firstNonBlank(
+                    organization.optString("organization_name"),
+                    organization.optString("institution_name"),
+                    organization.optString("hospital_name"),
+                    organization.optString("name")
                 )
-
-                val companyId = firstNonBlank(
-                    data.optString("company_id"),
-                    company.optString("company_id"),
-                    company.optString("id")
-                )
-                val companyName = firstNonBlank(
-                    data.optString("company_name"),
-                    company.optString("company_name"),
-                    company.optString("name"),
-                    // In this Main Server contract organization_name is the
-                    // parent organization/company, never the hospital name.
-                    data.optString("organization_name")
-                )
-
                 val registeredMobile = normalizeMobile(firstNonBlank(
-                    data.optString("registered_mobile_number"),
-                    data.optString("mobile_number"),
-                    data.optString("registered_mobile"),
-                    institution.optString("registered_mobile_number"),
-                    institution.optString("mobile_number"),
-                    institution.optString("mobile")
+                    organization.optString("mobile_number"),
+                    organization.optString("registered_mobile_number"),
+                    organization.optString("registered_mobile"),
+                    organization.optString("mobile")
                 ))
                 val organizationStatus = firstNonBlank(
-                    data.optString("verification_status"),
-                    data.optString("organization_status"),
-                    data.optString("status"),
-                    institution.optString("verification_status"),
-                    institution.optString("status"),
-                    "verified"
+                    organization.optString("organization_status"),
+                    organization.optString("status"),
+                    organization.optString("verification_status")
                 )
                 val serverVerified = data.optBoolean(
                     "verified",
                     data.optBoolean("success", response.optBoolean("verified", true))
-                ) && (organizationStatus.equals("active", true) ||
-                    organizationStatus.equals("verified", true))
+                ) && organizationStatus.equals("active", true).let { active ->
+                    active || organizationStatus.equals("verified", true)
+                }
 
                 if (!serverVerified) {
                     SecureConfig.clearOrganizationVerification(context)
-                    throw IOException(
-                        "ORGANIZATION_NOT_VERIFIED: Main Server did not confirm a verified institution record."
-                    )
+                    throw IOException("ORGANIZATION_NOT_VERIFIED: Main Server did not confirm a verified organization record.")
                 }
                 if (returnedCode.isBlank() || returnedCode != code.uppercase()) {
                     SecureConfig.clearOrganizationVerification(context)
-                    throw IOException(
-                        "ORGANIZATION_CODE_MISMATCH: Client Database Institution Code does not exactly match the entered code."
-                    )
+                    throw IOException("ORGANIZATION_CODE_MISMATCH: Client Database Organization Code does not exactly match the entered code.")
                 }
-                if (institutionId.isBlank() || institutionName.isBlank()) {
+                if (organizationId.isBlank() || organizationName.isBlank()) {
                     SecureConfig.clearOrganizationVerification(context)
-                    throw IOException(
-                        "INSTITUTION_DATA_INCOMPLETE: Client Database did not return Institution ID and Institution Name."
-                    )
-                }
-                if (companyId.isBlank() || companyName.isBlank()) {
-                    SecureConfig.clearOrganizationVerification(context)
-                    throw IOException(
-                        "COMPANY_DATA_INCOMPLETE: Main Server did not return Company ID and Company Name."
-                    )
-                }
-                if (companyId.toLongOrNull() == null || companyId.toLong() <= 0L) {
-                    SecureConfig.clearOrganizationVerification(context)
-                    throw IOException("INVALID_COMPANY_ID: Main Server returned an invalid Company ID.")
+                    throw IOException("ORGANIZATION_DATA_INCOMPLETE: Client Database did not return Organization ID and Organization Name.")
                 }
                 if (registeredMobile.length !in 8..15) {
                     SecureConfig.clearOrganizationVerification(context)
-                    throw IOException(
-                        "REGISTERED_MOBILE_MISSING: Client Database did not return the saved mobile number."
-                    )
+                    throw IOException("REGISTERED_MOBILE_MISSING: Client Database did not return a valid registered mobile number.")
                 }
-                // This endpoint updates the Client DB mobile from the submitted app
-                // number and returns the value read back from the database. Confirm
-                // the returned value matches before storing it locally.
                 if (normalizeMobile(mobile) != registeredMobile) {
                     SecureConfig.clearOrganizationVerification(context)
-                    throw IOException(
-                        "REGISTERED_MOBILE_UPDATE_NOT_CONFIRMED: Client Database did not return the requested updated mobile number."
-                    )
+                    throw IOException("REGISTERED_MOBILE_MISMATCH: Entered mobile number does not match the Client Database registered mobile.")
                 }
 
                 if (!SecureConfig.saveVerifiedOrganization(
                     context = context,
-                    organizationId = institutionId,
-                    organizationName = institutionName,
+                    organizationId = organizationId,
+                    organizationName = organizationName,
                     organizationCode = returnedCode,
                     registeredMobile = registeredMobile,
-                    organizationStatus = organizationStatus,
-                    companyId = companyId,
-                    companyName = companyName
+                    organizationStatus = organizationStatus
                 )) {
                     SecureConfig.clearOrganizationVerification(context)
-                    throw IOException(
-                        "ORGANIZATION_SAVE_FAILED: Verified Company and Institution details could not be saved."
-                    )
+                    throw IOException("ORGANIZATION_SAVE_FAILED: Verified organization details could not be saved.")
                 }
 
                 response
@@ -363,9 +305,26 @@ object ApiClient {
                         "COMPANY_API_KEY_REQUIRED: Enter the Company API Key."
                     )
 
+                // Activation must be tied to the Institution already verified
+                // by the Main Server. Do not accept a manually typed institution ID.
+                if (!SecureConfig.isOrganizationVerified(context)) {
+                    throw IOException(
+                        "ORGANIZATION_NOT_VERIFIED: Verify the institution before activating the device."
+                    )
+                }
+
+                val institutionId = SecureConfig
+                    .getOrganizationId(context)
+                    .trim()
+                    .toLongOrNull()
+                    ?: throw IOException(
+                        "INSTITUTION_ID_MISSING: Main Server did not save a valid Institution ID."
+                    )
+
                 val body = JSONObject()
                     .put("deviceCode", deviceCode)
                     .put("companyApiKey", companyApiKey)
+                    .put("institutionId", institutionId)
 
                 val response = request(
                     endpoint = buildEndpoint(
