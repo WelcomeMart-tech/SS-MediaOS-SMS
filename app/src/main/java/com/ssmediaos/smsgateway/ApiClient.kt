@@ -98,117 +98,236 @@ object ApiClient {
         executor.execute {
             val result = runCatching {
                 val context = AppContextHolder.context
+
                 val apiKey = companyApiKey.trim()
-                val code = institutionCode.trim().uppercase()
+                val code = institutionCode.trim()
                 val mobile = registeredMobileNumber.trim()
 
-                if (apiKey.isBlank()) throw IOException("COMPANY_API_KEY_REQUIRED: Enter the Company API Key.")
-                if (code.isBlank()) throw IOException("INSTITUTION_CODE_REQUIRED: Enter the Institution Code.")
-                if (mobile.isBlank()) throw IOException("REGISTERED_MOBILE_REQUIRED: Enter the registered mobile number.")
-                if (mobile.any { !it.isDigit() && it !in "+- ()" } || normalizeMobile(mobile).length !in 8..15) {
-                    throw IOException("INVALID_REGISTERED_MOBILE: Check the registered mobile number.")
+                if (apiKey.isBlank()) {
+                    throw IOException(
+                        "COMPANY_API_KEY_REQUIRED: Enter the Company API Key."
+                    )
                 }
 
-                // A new verification attempt must never reuse a previous institution's activation.
-                SecureConfig.clearDeviceToken(context)
-                SecureConfig.clearOrganizationVerification(context)
+                if (code.isBlank()) {
+                    throw IOException(
+                        "INSTITUTION_CODE_REQUIRED: Enter the Institution Code."
+                    )
+                }
 
-                val deviceCode = SecureConfig.getDeviceCode(context).trim()
+                if (mobile.isBlank()) {
+                    throw IOException(
+                        "REGISTERED_MOBILE_REQUIRED: Enter the mobile number registered with the institution."
+                    )
+                }
+
+                if (
+                    mobile.any { !it.isDigit() && it != '+' && it != '-' && it != ' ' && it != '(' && it != ')' } ||
+                    normalizeMobile(mobile).length !in 8..15
+                ) {
+                    throw IOException(
+                        "INVALID_REGISTERED_MOBILE: Check the registered mobile number."
+                    )
+                }
+
+                /*
+                 * Remove an old activation token before a new diagnostic.
+                 * A previous successful verification must not authorize
+                 * a new institution code or API key.
+                 */
+                SecureConfig.clearDeviceToken(context)
+
+                val deviceCode = SecureConfig
+                    .getDeviceCode(context)
+                    .trim()
+
                 val body = JSONObject()
                     .put("companyApiKey", apiKey)
                     .put("institutionCode", code)
-                    .put("institution_code", code)
-                    .put("organizationCode", code) // legacy Main Server compatibility
+                    .put("organizationCode", code)
                     .put("registeredMobileNumber", mobile)
-                    .put("registered_mobile", normalizeMobile(mobile))
                     .put("deviceCode", deviceCode)
-                    .put("device_code", deviceCode)
 
                 val response = request(
-                    endpoint = buildEndpoint(getServerUrl(context), GATEWAY_DIAGNOSTICS_PATH),
+                    endpoint = buildEndpoint(
+                        getServerUrl(context),
+                        GATEWAY_DIAGNOSTICS_PATH
+                    ),
                     method = "POST",
                     bearerToken = apiKey,
                     body = body,
                     allowHttpErrors = true
                 )
+
                 val httpStatus = response.optInt("_httpStatus", 200)
                 if (httpStatus !in 200..299 || !response.optBoolean("ok", false)) {
-                    throw IOException(buildServerError(response, httpStatus, "GATEWAY_DIAGNOSTICS_FAILED"))
+                    SecureConfig.clearOrganizationVerification(context)
+                    throw IOException(
+                        buildServerError(response, httpStatus, "GATEWAY_DIAGNOSTICS_FAILED")
+                    )
                 }
 
+                // Diagnostics PASS alone is not organization verification.
+                // Main Server response is: { ok, checks, data: { company_*, institution_*, ... } }.
+                // Keep Company and Institution objects separate: organization_name is
+                // the parent Company name in this API, NOT the Institution name.
                 val data = response.optJSONObject("data") ?: response
                 val checks = response.optJSONObject("checks")
                     ?: data.optJSONObject("checks")
-                    ?: throw IOException("DIAGNOSTIC_CHECKS_MISSING: Main Server did not return diagnostic checks.")
-                val requiredChecks = listOf("main_server", "company_auth", "client_api_config", "client_api", "client_database", "institution")
+                    ?: throw IOException(
+                        "DIAGNOSTIC_CHECKS_MISSING: Main Server did not return diagnostic checks."
+                    )
+
+                val requiredChecks = listOf(
+                    "main_server", "company_auth", "client_api_config",
+                    "client_api", "client_database", "institution"
+                )
                 val failedChecks = requiredChecks.filter { name ->
-                    !checks.optJSONObject(name)?.optString("status", "UNKNOWN").equals("PASS", true)
+                    checks.optJSONObject(name)?.optString("status", "UNKNOWN")
+                        ?.equals("PASS", ignoreCase = true) != true
                 }
                 if (failedChecks.isNotEmpty()) {
-                    throw IOException("DIAGNOSTICS_INCOMPLETE: Required checks did not pass: ${failedChecks.joinToString(", ")}.")
+                    SecureConfig.clearOrganizationVerification(context)
+                    throw IOException(
+                        "DIAGNOSTICS_INCOMPLETE: Required checks did not pass: ${failedChecks.joinToString(", ")}."
+                    )
                 }
 
                 val institution = data.optJSONObject("institution")
-                    ?: data.optJSONObject("organization")
                     ?: data.optJSONObject("hospital")
+                    ?: data.optJSONObject("organization")
                     ?: response.optJSONObject("institution")
+                    ?: response.optJSONObject("hospital")
                     ?: response.optJSONObject("organization")
                     ?: data
+                val company = data.optJSONObject("company")
+                    ?: response.optJSONObject("company")
+                    ?: JSONObject()
+
+                // Exact Institution fields have priority. Never use organization_name
+                // as Institution Name because it represents the parent Company.
                 val returnedCode = firstNonBlank(
-                    institution.optString("institution_code"), institution.optString("organization_code"),
-                    institution.optString("hospital_code"), institution.optString("code")
+                    data.optString("institution_code"),
+                    data.optString("hospital_code"),
+                    institution.optString("institution_code"),
+                    institution.optString("hospital_code"),
+                    institution.optString("organization_code"),
+                    institution.optString("code")
                 ).uppercase()
                 val institutionId = firstNonBlank(
-                    institution.optString("institution_id"), institution.optString("organization_id"),
-                    institution.optString("hospital_id"), institution.optString("id")
+                    data.optString("institution_id"),
+                    data.optString("hospital_id"),
+                    institution.optString("institution_id"),
+                    institution.optString("hospital_id"),
+                    institution.optString("id")
                 )
                 val institutionName = firstNonBlank(
-                    institution.optString("institution_name"), institution.optString("organization_name"),
-                    institution.optString("hospital_name"), institution.optString("name")
+                    data.optString("institution_name"),
+                    data.optString("hospital_name"),
+                    institution.optString("institution_name"),
+                    institution.optString("hospital_name"),
+                    institution.optString("name")
                 )
-                val serverMobile = normalizeMobile(firstNonBlank(
-                    institution.optString("registered_mobile"), institution.optString("registered_mobile_number"),
-                    institution.optString("mobile_number"), institution.optString("mobile")
-                ))
-                val institutionStatus = firstNonBlank(
-                    institution.optString("verification_status"), institution.optString("institution_status"),
-                    institution.optString("organization_status"), institution.optString("status")
-                )
-                val explicitlyVerified = data.optBoolean("verified", false) ||
-                    data.optBoolean("success", false) || response.optBoolean("verified", false) ||
-                    response.optBoolean("success", false) ||
-                    institution.optBoolean("verified", false)
-                val statusVerified = institutionStatus.equals("active", true) || institutionStatus.equals("verified", true)
 
-                if (!explicitlyVerified && !statusVerified) {
-                    throw IOException("INSTITUTION_NOT_VERIFIED: Main Server did not confirm this institution.")
+                val companyId = firstNonBlank(
+                    data.optString("company_id"),
+                    company.optString("company_id"),
+                    company.optString("id")
+                )
+                val companyName = firstNonBlank(
+                    data.optString("company_name"),
+                    company.optString("company_name"),
+                    company.optString("name"),
+                    // In this Main Server contract organization_name is the
+                    // parent organization/company, never the hospital name.
+                    data.optString("organization_name")
+                )
+
+                val registeredMobile = normalizeMobile(firstNonBlank(
+                    data.optString("registered_mobile_number"),
+                    data.optString("mobile_number"),
+                    data.optString("registered_mobile"),
+                    institution.optString("registered_mobile_number"),
+                    institution.optString("mobile_number"),
+                    institution.optString("mobile")
+                ))
+                val organizationStatus = firstNonBlank(
+                    data.optString("verification_status"),
+                    data.optString("organization_status"),
+                    data.optString("status"),
+                    institution.optString("verification_status"),
+                    institution.optString("status"),
+                    "verified"
+                )
+                val serverVerified = data.optBoolean(
+                    "verified",
+                    data.optBoolean("success", response.optBoolean("verified", true))
+                ) && (organizationStatus.equals("active", true) ||
+                    organizationStatus.equals("verified", true))
+
+                if (!serverVerified) {
+                    SecureConfig.clearOrganizationVerification(context)
+                    throw IOException(
+                        "ORGANIZATION_NOT_VERIFIED: Main Server did not confirm a verified institution record."
+                    )
                 }
-                if (returnedCode.isBlank() || returnedCode != code) {
-                    throw IOException("INSTITUTION_CODE_MISMATCH: Client Server Institution Code does not exactly match the entered code.")
+                if (returnedCode.isBlank() || returnedCode != code.uppercase()) {
+                    SecureConfig.clearOrganizationVerification(context)
+                    throw IOException(
+                        "ORGANIZATION_CODE_MISMATCH: Client Database Institution Code does not exactly match the entered code."
+                    )
                 }
                 if (institutionId.isBlank() || institutionName.isBlank()) {
-                    throw IOException("INSTITUTION_DATA_INCOMPLETE: Main Server must return Institution ID and Institution Name.")
+                    SecureConfig.clearOrganizationVerification(context)
+                    throw IOException(
+                        "INSTITUTION_DATA_INCOMPLETE: Client Database did not return Institution ID and Institution Name."
+                    )
                 }
-                if (serverMobile.length !in 8..15 || normalizeMobile(mobile) != serverMobile) {
-                    throw IOException("REGISTERED_MOBILE_MISMATCH: Entered mobile number does not match the verified institution record.")
+                if (companyId.isBlank() || companyName.isBlank()) {
+                    SecureConfig.clearOrganizationVerification(context)
+                    throw IOException(
+                        "COMPANY_DATA_INCOMPLETE: Main Server did not return Company ID and Company Name."
+                    )
+                }
+                if (companyId.toLongOrNull() == null || companyId.toLong() <= 0L) {
+                    SecureConfig.clearOrganizationVerification(context)
+                    throw IOException("INVALID_COMPANY_ID: Main Server returned an invalid Company ID.")
+                }
+                if (registeredMobile.length !in 8..15) {
+                    SecureConfig.clearOrganizationVerification(context)
+                    throw IOException(
+                        "REGISTERED_MOBILE_MISSING: Client Database did not return the saved mobile number."
+                    )
+                }
+                // This endpoint updates the Client DB mobile from the submitted app
+                // number and returns the value read back from the database. Confirm
+                // the returned value matches before storing it locally.
+                if (normalizeMobile(mobile) != registeredMobile) {
+                    SecureConfig.clearOrganizationVerification(context)
+                    throw IOException(
+                        "REGISTERED_MOBILE_UPDATE_NOT_CONFIRMED: Client Database did not return the requested updated mobile number."
+                    )
                 }
 
-                // Status is retained internally only for the verification gate; it is not a UI field.
-                val internalStatus = if (statusVerified) institutionStatus else "Verified"
                 if (!SecureConfig.saveVerifiedOrganization(
                     context = context,
                     organizationId = institutionId,
                     organizationName = institutionName,
                     organizationCode = returnedCode,
-                    registeredMobile = serverMobile,
-                    organizationStatus = internalStatus
+                    registeredMobile = registeredMobile,
+                    organizationStatus = organizationStatus,
+                    companyId = companyId,
+                    companyName = companyName
                 )) {
-                    throw IOException("INSTITUTION_SAVE_FAILED: Verified institution details could not be saved securely.")
+                    SecureConfig.clearOrganizationVerification(context)
+                    throw IOException(
+                        "ORGANIZATION_SAVE_FAILED: Verified Company and Institution details could not be saved."
+                    )
                 }
 
-                // Keep the original response intact so the Settings screen can display Company + Institution details.
                 response
             }
+
             callbackSafely(callback, result)
         }
     }
@@ -219,83 +338,86 @@ object ApiClient {
      * Activation is accepted only when Main Server confirms success
      * and returns a valid device token.
      */
-    fun activate(callback: (Result<JSONObject>) -> Unit) {
+    fun activate(
+        callback: (Result<JSONObject>) -> Unit
+    ) {
         executor.execute {
             val result = runCatching {
                 val context = AppContextHolder.context
-                if (!SecureConfig.isOrganizationVerified(context)) {
-                    throw IOException("INSTITUTION_NOT_VERIFIED: Verify one institution before device activation.")
-                }
-                val deviceCode = SecureConfig.getDeviceCode(context).trim()
+
+                val serverUrl = getServerUrl(context)
+
+                val deviceCode = SecureConfig
+                    .getDeviceCode(context)
+                    .trim()
                     .takeIf { it.isNotEmpty() }
-                    ?: throw IOException("DEVICE_CODE_REQUIRED: Device ID is unavailable.")
-                val companyApiKey = SecureConfig.getCompanyApiKey(context)?.trim()
+                    ?: throw IOException(
+                        "DEVICE_CODE_REQUIRED: Device ID is unavailable."
+                    )
+
+                val companyApiKey = SecureConfig
+                    .getCompanyApiKey(context)
+                    ?.trim()
                     ?.takeIf { it.isNotEmpty() }
-                    ?: throw IOException("COMPANY_API_KEY_REQUIRED: Enter the Company API Key.")
-                val institutionId = SecureConfig.getOrganizationId(context).trim()
-                val institutionName = SecureConfig.getOrganizationName(context).trim()
-                val institutionCode = SecureConfig.getOrganizationCode(context).trim()
-                val registeredMobile = SecureConfig.getRegisteredMobile(context).trim()
-                if (institutionId.isBlank() || institutionName.isBlank() || institutionCode.isBlank()) {
-                    throw IOException("INSTITUTION_DETAILS_MISSING: Verify the institution again before activation.")
-                }
+                    ?: throw IOException(
+                        "COMPANY_API_KEY_REQUIRED: Enter the Company API Key."
+                    )
 
                 val body = JSONObject()
-                    .put("companyApiKey", companyApiKey)
                     .put("deviceCode", deviceCode)
-                    .put("device_code", deviceCode)
-                    .put("institutionId", institutionId)
-                    .put("institution_id", institutionId)
-                    .put("institutionName", institutionName)
-                    .put("institution_name", institutionName)
-                    .put("institutionCode", institutionCode)
-                    .put("institution_code", institutionCode)
-                    .put("registeredMobileNumber", registeredMobile)
+                    .put("companyApiKey", companyApiKey)
 
                 val response = request(
-                    endpoint = buildEndpoint(getServerUrl(context), DEVICE_ACTIVATE_PATH),
+                    endpoint = buildEndpoint(
+                        serverUrl,
+                        DEVICE_ACTIVATE_PATH
+                    ),
                     method = "POST",
                     bearerToken = companyApiKey,
                     body = body,
                     allowHttpErrors = true
                 )
+
                 val httpStatus = response.optInt("_httpStatus", 200)
-                if (httpStatus !in 200..299 || !response.optBoolean("ok", false)) {
+
+                if (
+                    httpStatus !in 200..299 ||
+                    !response.optBoolean("ok", false)
+                ) {
                     SecureConfig.clearDeviceToken(context)
-                    throw IOException(buildServerError(response, httpStatus, "DEVICE_ACTIVATION_REJECTED"))
+
+                    throw IOException(
+                        buildServerError(
+                            response,
+                            httpStatus,
+                            "DEVICE_ACTIVATION_REJECTED"
+                        )
+                    )
                 }
 
-                val data = response.optJSONObject("data") ?: response
-                val returnedCode = firstNonBlank(
-                    data.optString("institution_code"), data.optString("institutionCode"),
-                    data.optString("organization_code"), data.optString("deviceInstitutionCode")
-                )
-                val returnedId = firstNonBlank(
-                    data.optString("institution_id"), data.optString("institutionId"),
-                    data.optString("organization_id")
-                )
-                if (returnedCode.isNotBlank() && !returnedCode.equals(institutionCode, true)) {
-                    SecureConfig.clearDeviceToken(context)
-                    throw IOException("ACTIVATION_INSTITUTION_MISMATCH: Server activated a different institution.")
-                }
-                if (returnedId.isNotBlank() && returnedId != institutionId) {
-                    SecureConfig.clearDeviceToken(context)
-                    throw IOException("ACTIVATION_INSTITUTION_MISMATCH: Server institution ID does not match this gateway.")
-                }
-                val deviceToken = firstNonBlank(
-                    response.optString("deviceToken"), response.optString("device_token"),
-                    data.optString("deviceToken"), data.optString("device_token")
-                )
+                val deviceToken = response
+                    .optString("deviceToken")
+                    .trim()
+
                 if (deviceToken.isBlank()) {
                     SecureConfig.clearDeviceToken(context)
-                    throw IOException("DEVICE_TOKEN_MISSING: Main Server did not return a device token.")
+
+                    throw IOException(
+                        "DEVICE_TOKEN_MISSING: Server did not return a device token."
+                    )
                 }
+
                 if (!SecureConfig.saveDeviceToken(context, deviceToken)) {
                     SecureConfig.clearDeviceToken(context)
-                    throw IOException("DEVICE_TOKEN_SAVE_FAILED: Could not securely save the device token.")
+
+                    throw IOException(
+                        "DEVICE_TOKEN_SAVE_FAILED: Could not securely save the device token."
+                    )
                 }
+
                 response
             }
+
             callbackSafely(callback, result)
         }
     }
@@ -310,17 +432,14 @@ object ApiClient {
             val result = runCatching {
                 val context = AppContextHolder.context
 
-                if (!SecureConfig.isOrganizationVerified(context)) {
-                    throw IOException("INSTITUTION_NOT_VERIFIED: SMS polling is blocked until an institution is verified.")
-                }
                 val response = request(
-                    endpoint = buildEndpoint(getServerUrl(context), DEVICE_POLL_PATH),
+                    endpoint = buildEndpoint(
+                        getServerUrl(context),
+                        DEVICE_POLL_PATH
+                    ),
                     method = "POST",
                     gatewayToken = getDeviceToken(context),
                     body = JSONObject()
-                        .put("institution_id", SecureConfig.getOrganizationId(context))
-                        .put("institution_code", SecureConfig.getOrganizationCode(context))
-                        .put("device_code", SecureConfig.getDeviceCode(context))
                 )
 
                 ensureSuccess(
@@ -362,9 +481,6 @@ object ApiClient {
                     .put("job_id", jobId)
                     .put("request_id", requestId)
                     .put("success", success)
-                    .put("institution_id", SecureConfig.getOrganizationId(context))
-                    .put("institution_code", SecureConfig.getOrganizationCode(context))
-                    .put("device_code", SecureConfig.getDeviceCode(context))
                     .put("provider_message_id", providerMessageId?.trim()?.take(150) ?: "")
                     .put(
                         "error_code",
