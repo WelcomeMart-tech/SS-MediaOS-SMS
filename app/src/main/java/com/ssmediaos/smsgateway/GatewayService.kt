@@ -416,16 +416,6 @@ class GatewayService : Service() {
     }
 
     /**
-     * Schedule a fast follow-up poll after a job result is acknowledged.
-     * Existing periodic polling remains the fallback when the server is idle.
-     */
-    private fun scheduleImmediatePoll() {
-        if (!serviceRunning) return
-        handler.removeCallbacks(pollRunnable)
-        handler.postDelayed(pollRunnable, IMMEDIATE_POLL_DELAY_MS)
-    }
-
-    /**
      * Fetch one queued job from device_poll.php.
      *
      * A successful authenticated polling response marks the server
@@ -492,6 +482,16 @@ class GatewayService : Service() {
     }
 
     /**
+     * Keep this rule identical to message_enqueue.php:
+     * ignore only underscore, hyphen and whitespace; compare case-insensitively.
+     */
+    private fun normalizeInstitutionCode(value: String): String {
+        return value.trim()
+            .replace(Regex("[_\\-\\s]+"), "")
+            .uppercase(java.util.Locale.ROOT)
+    }
+
+    /**
      * Validate a claimed server job and submit it to Android.
      */
     private fun processJob(job: JSONObject) {
@@ -554,15 +554,28 @@ class GatewayService : Service() {
             job.optString("organizationCode", "")
         ).map { it.trim() }.firstOrNull { it.isNotBlank() }.orEmpty()
 
+        // device_poll.php authenticates the gateway token and selects queue rows
+        // scoped to that device's company_id + institution_id. Some deployed
+        // versions return only id/request_id/recipient/message in the job JSON,
+        // so institution fields may legitimately be absent. Require the locally
+        // verified identity, and compare server-returned identity whenever it is
+        // present; do not reject a tenant-scoped job merely because older poll
+        // responses omit duplicate institution metadata.
+        val institutionIdMismatch =
+            jobInstitutionId.isNotBlank() &&
+                jobInstitutionId != verifiedInstitutionId
+        val institutionCodeMismatch =
+            jobInstitutionCode.isNotBlank() &&
+                normalizeInstitutionCode(jobInstitutionCode) !=
+                normalizeInstitutionCode(verifiedInstitutionCode)
+
         if (
             verifiedInstitutionId.isBlank() ||
             verifiedInstitutionCode.isBlank() ||
-            jobInstitutionId.isBlank() ||
-            jobInstitutionCode.isBlank() ||
-            jobInstitutionId != verifiedInstitutionId ||
-            !jobInstitutionCode.equals(verifiedInstitutionCode, ignoreCase = true)
+            institutionIdMismatch ||
+            institutionCodeMismatch
         ) {
-            Log.e(TAG, "SMS job blocked: institution ID/code missing or mismatched")
+            Log.e(TAG, "SMS job blocked: verified institution identity is missing or server identity mismatched")
             rejectClaimedJob(
                 jobId, requestId, "INSTITUTION_MISMATCH",
                 "SMS blocked: job does not belong to this verified institution"
@@ -734,19 +747,15 @@ class GatewayService : Service() {
 
                     Log.i(TAG, "Server accepted result for job ${pending.jobId}")
                     requestInProgress = false
+                    scheduleImmediatePoll()
 
                     updateStatus(
                         if (pending.success) {
-                            "SMS result accepted — checking queue immediately"
+                            "SMS result accepted — waiting for next job"
                         } else {
-                            "SMS failure reported — checking queue immediately"
+                            "SMS failure reported — waiting for next job"
                         }
                     )
-
-                    // Do not wait for the normal idle polling interval after a
-                    // completed job. Ask Main Server for the next queued job
-                    // immediately, while retaining the single-request guard.
-                    scheduleImmediatePoll()
                 },
 
                 onFailure = { exception ->
@@ -761,6 +770,13 @@ class GatewayService : Service() {
                 }
             )
         }
+    }
+
+    /** Schedule the next queue check promptly after a completed job. */
+    private fun scheduleImmediatePoll() {
+        if (!serviceRunning) return
+        handler.removeCallbacks(pollRunnable)
+        handler.postDelayed(pollRunnable, IMMEDIATE_POLL_DELAY_MS)
     }
 
     private fun savePendingResult(result: PendingGatewayResult) {
@@ -975,8 +991,6 @@ class GatewayService : Service() {
         private const val CHANNEL_ID = "sms_gateway_service"
         private const val NOTIFICATION_ID = 1001
 
-        // Fast queue check while the foreground gateway is connected.
-        // Two seconds keeps delivery responsive without hammering the server.
         private const val POLL_INTERVAL_MS = 2000L
         private const val IMMEDIATE_POLL_DELAY_MS = 250L
 
