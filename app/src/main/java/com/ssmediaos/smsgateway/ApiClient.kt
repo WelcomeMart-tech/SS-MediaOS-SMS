@@ -13,7 +13,7 @@ object ApiClient {
     private val executor = Executors.newSingleThreadExecutor()
 
     private const val CONNECT_TIMEOUT = 15000
-    private const val READ_TIMEOUT = 20000
+    private const val READ_TIMEOUT = 30000
 
     private const val DEFAULT_SERVER_URL =
         "https://otp.ssmediaos.in"
