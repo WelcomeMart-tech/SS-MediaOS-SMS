@@ -1010,6 +1010,14 @@ Review the final target SDK, manifest and service implementation before release;
             PREF_SERVER_CHECK_AT,
             0L
         )
+        val lastGatewayDetail = serverPrefs.getString(
+            PREF_LAST_STATUS_MESSAGE,
+            ""
+        ).orEmpty().trim()
+        val lastGatewayDetailAt = serverPrefs.getLong(
+            PREF_LAST_STATUS_AT,
+            0L
+        )
 
         val now = System.currentTimeMillis()
 
@@ -1103,6 +1111,19 @@ Review the final target SDK, manifest and service implementation before release;
                 )
             } else {
                 appendLine("Last server check: Not available yet")
+            }
+
+            if (lastGatewayDetail.isNotBlank()) {
+                appendLine("Gateway detail: $lastGatewayDetail")
+                if (lastGatewayDetailAt > 0L) {
+                    appendLine(
+                        "Detail updated: " +
+                            android.text.format.DateFormat.format(
+                                "dd MMM yyyy, hh:mm:ss a",
+                                lastGatewayDetailAt
+                            )
+                    )
+                }
             }
 
             if (message != null) {
@@ -1201,6 +1222,12 @@ Review the final target SDK, manifest and service implementation before release;
 
         private const val PREF_SERVER_CHECK_AT =
             "server_check_at"
+
+        private const val PREF_LAST_STATUS_MESSAGE =
+            "last_status_message"
+
+        private const val PREF_LAST_STATUS_AT =
+            "last_status_at"
 
         private const val SERVER_STATE_CONNECTED =
             "CONNECTED"
