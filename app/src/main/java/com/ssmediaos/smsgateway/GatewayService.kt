@@ -416,6 +416,16 @@ class GatewayService : Service() {
     }
 
     /**
+     * Schedule a fast follow-up poll after a job result is acknowledged.
+     * Existing periodic polling remains the fallback when the server is idle.
+     */
+    private fun scheduleImmediatePoll() {
+        if (!serviceRunning) return
+        handler.removeCallbacks(pollRunnable)
+        handler.postDelayed(pollRunnable, IMMEDIATE_POLL_DELAY_MS)
+    }
+
+    /**
      * Fetch one queued job from device_poll.php.
      *
      * A successful authenticated polling response marks the server
@@ -727,11 +737,16 @@ class GatewayService : Service() {
 
                     updateStatus(
                         if (pending.success) {
-                            "SMS result accepted — waiting for next job"
+                            "SMS result accepted — checking queue immediately"
                         } else {
-                            "SMS failure reported — waiting for next job"
+                            "SMS failure reported — checking queue immediately"
                         }
                     )
+
+                    // Do not wait for the normal idle polling interval after a
+                    // completed job. Ask Main Server for the next queued job
+                    // immediately, while retaining the single-request guard.
+                    scheduleImmediatePoll()
                 },
 
                 onFailure = { exception ->
@@ -960,7 +975,10 @@ class GatewayService : Service() {
         private const val CHANNEL_ID = "sms_gateway_service"
         private const val NOTIFICATION_ID = 1001
 
-        private const val POLL_INTERVAL_MS = 5000L
+        // Fast queue check while the foreground gateway is connected.
+        // Two seconds keeps delivery responsive without hammering the server.
+        private const val POLL_INTERVAL_MS = 2000L
+        private const val IMMEDIATE_POLL_DELAY_MS = 250L
 
         private const val PREF_SERVICE_RUNNING = "service_running"
         private const val PREF_SERVER_STATE = "server_state"
