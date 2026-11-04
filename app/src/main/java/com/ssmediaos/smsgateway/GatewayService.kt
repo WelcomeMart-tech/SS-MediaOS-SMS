@@ -67,8 +67,6 @@ class GatewayService : Service() {
             if (!requestInProgress) {
                 pollServer()
             }
-
-            handler.postDelayed(this, POLL_INTERVAL_MS)
         }
     }
 
@@ -289,6 +287,7 @@ class GatewayService : Service() {
 
             saveServiceRunning(false)
             setServerState(STATE_FAILED)
+            updateStatus("Gateway not started: save the Main Server URL, Device Code and Company API Key first")
 
             stopSelf(startId)
             return
@@ -299,7 +298,7 @@ class GatewayService : Service() {
 
             saveServiceRunning(false)
             setServerState(STATE_FAILED)
-            updateStatus("Verify the institution and registered mobile first")
+            updateStatus("Gateway not started: verify the institution and registered mobile first")
             stopSelf(startId)
             return
         }
@@ -333,6 +332,7 @@ class GatewayService : Service() {
 
             saveServiceRunning(false)
             setServerState(STATE_FAILED)
+            updateStatus("Gateway not started: activate this device with Main Server first")
 
             stopSelf(startId)
             return
@@ -450,6 +450,7 @@ class GatewayService : Service() {
 
                         setServerState(STATE_FAILED)
                         updateStatus("Invalid server response")
+                        scheduleRetryPoll()
 
                         return@fold
                     }
@@ -459,23 +460,38 @@ class GatewayService : Service() {
 
                     if (job == null) {
                         requestInProgress = false
-                        updateStatus("Connected — waiting for SMS jobs")
+                        if (response.optBoolean("busy", false)) {
+                            updateStatus("Connected — a previous SMS job is still awaiting its result acknowledgement")
+                            // Avoid rapid empty responses while Main Server is
+                            // holding a job in `sending` state.
+                            scheduleRetryPoll()
+                        } else {
+                            updateStatus("Connected — waiting for SMS jobs")
+                            // Keep one long-poll request active continuously. The Main
+                            // Server returns immediately when a new queue row appears.
+                            scheduleImmediatePoll()
+                        }
                         return@fold
                     }
 
+                    updateStatus("SMS job received from Main Server — preparing selected SIM")
                     processJob(job)
                 },
 
                 onFailure = { exception ->
                     requestInProgress = false
 
-                    Log.e(
-                        TAG,
-                        "Gateway polling failed (${exception.javaClass.simpleName})"
-                    )
+                    val detail = exception.message
+                        ?.replace(Regex("[\r\n\t]+"), " ")
+                        ?.take(220)
+                        ?.ifBlank { exception.javaClass.simpleName }
+                        ?: exception.javaClass.simpleName
+
+                    Log.e(TAG, "Gateway polling failed: $detail", exception)
 
                     setServerState(STATE_FAILED)
-                    updateStatus("Server connection failed — retrying")
+                    updateStatus("Main Server poll failed: $detail — retrying")
+                    scheduleRetryPoll()
                 }
             )
         }
@@ -595,6 +611,7 @@ class GatewayService : Service() {
             Log.e(TAG, "Duplicate in-flight SMS job ignored: $jobId")
             requestInProgress = false
             updateStatus("Duplicate SMS job ignored — check server")
+            scheduleImmediatePoll()
             return
         }
 
@@ -732,6 +749,7 @@ class GatewayService : Service() {
                         )
                         requestInProgress = false
                         updateStatus("Result report rejected — retrying")
+                        scheduleRetryPoll()
                         return@fold
                     }
 
@@ -767,6 +785,7 @@ class GatewayService : Service() {
                     // Keep the pending result. pollServer() retries it.
                     requestInProgress = false
                     updateStatus("Result report failed — retrying")
+                    scheduleRetryPoll()
                 }
             )
         }
@@ -777,6 +796,13 @@ class GatewayService : Service() {
         if (!serviceRunning) return
         handler.removeCallbacks(pollRunnable)
         handler.postDelayed(pollRunnable, IMMEDIATE_POLL_DELAY_MS)
+    }
+
+    /** Back off briefly on network/API failures; never spin a tight retry loop. */
+    private fun scheduleRetryPoll() {
+        if (!serviceRunning) return
+        handler.removeCallbacks(pollRunnable)
+        handler.postDelayed(pollRunnable, RETRY_POLL_DELAY_MS)
     }
 
     private fun savePendingResult(result: PendingGatewayResult) {
@@ -862,6 +888,15 @@ class GatewayService : Service() {
     }
 
     private fun updateStatus(message: String) {
+        // Persist the latest human-readable gateway detail so MainActivity can
+        // show the real reason (token rejected, network timeout, mapping issue,
+        // missing permissions, etc.) instead of only a generic FAILED label.
+        getSharedPreferences(statusPrefsName, MODE_PRIVATE)
+            .edit()
+            .putString(PREF_LAST_STATUS_MESSAGE, message.take(240))
+            .putLong(PREF_LAST_STATUS_AT, System.currentTimeMillis())
+            .apply()
+
         if (!serviceRunning) return
 
         try {
@@ -991,12 +1026,14 @@ class GatewayService : Service() {
         private const val CHANNEL_ID = "sms_gateway_service"
         private const val NOTIFICATION_ID = 1001
 
-        private const val POLL_INTERVAL_MS = 2000L
-        private const val IMMEDIATE_POLL_DELAY_MS = 250L
+        private const val IMMEDIATE_POLL_DELAY_MS = 150L
+        private const val RETRY_POLL_DELAY_MS = 3000L
 
         private const val PREF_SERVICE_RUNNING = "service_running"
         private const val PREF_SERVER_STATE = "server_state"
         private const val PREF_SERVER_CHECK_AT = "server_check_at"
+        private const val PREF_LAST_STATUS_MESSAGE = "last_status_message"
+        private const val PREF_LAST_STATUS_AT = "last_status_at"
         private const val PREF_PENDING_RESULT = "pending_gateway_result"
 
         private const val STATE_CONNECTED = "CONNECTED"
