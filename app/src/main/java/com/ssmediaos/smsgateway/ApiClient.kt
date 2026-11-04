@@ -385,13 +385,18 @@ object ApiClient {
             val result = runCatching {
                 val context = AppContextHolder.context
 
+                val gatewayToken = getDeviceToken(context)
+
                 val response = request(
                     endpoint = buildEndpoint(
                         getServerUrl(context),
                         DEVICE_POLL_PATH
                     ),
                     method = "POST",
-                    gatewayToken = getDeviceToken(context),
+                    // Send both headers. Some shared-hosting/FastCGI stacks
+                    // remove custom X-* headers but preserve Authorization.
+                    gatewayToken = gatewayToken,
+                    bearerToken = gatewayToken,
                     body = JSONObject()
                 )
 
@@ -440,13 +445,17 @@ object ApiClient {
                         errorCode?.trim()?.replace(Regex("[^A-Za-z0-9_.-]"), "_")?.take(100) ?: ""
                     )
 
+                val gatewayToken = getDeviceToken(context)
+
                 val response = request(
                     endpoint = buildEndpoint(
                         getServerUrl(context),
                         DEVICE_RESULT_PATH
                     ),
                     method = "POST",
-                    gatewayToken = getDeviceToken(context),
+                    // Keep X-Gateway-Token and add Authorization fallback.
+                    gatewayToken = gatewayToken,
+                    bearerToken = gatewayToken,
                     body = body
                 )
 
