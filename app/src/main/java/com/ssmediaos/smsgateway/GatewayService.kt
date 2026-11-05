@@ -274,7 +274,11 @@ class GatewayService : Service() {
     private fun startGateway(startId: Int) {
 
         if (serviceRunning) {
-            Log.i(TAG, "Gateway is already running")
+            Log.i(TAG, "Gateway is already running; ensuring polling is scheduled")
+            if (!requestInProgress) {
+                handler.removeCallbacks(pollRunnable)
+                handler.post(pollRunnable)
+            }
             return
         }
 
@@ -442,13 +446,13 @@ class GatewayService : Service() {
         setServerState(STATE_CONNECTING)
 
         ApiClient.pollGatewayJob { result ->
+            try {
+                if (!serviceRunning) {
+                    requestInProgress = false
+                    return@pollGatewayJob
+                }
 
-            if (!serviceRunning) {
-                requestInProgress = false
-                return@pollGatewayJob
-            }
-
-            result.fold(
+                result.fold(
                 onSuccess = { response ->
 
                     val job = response.optJSONObject("job")
@@ -507,7 +511,17 @@ class GatewayService : Service() {
                     }
 
                     updateStatus("SMS job received from Main Server — preparing selected SIM")
-                    processJob(job)
+                    try {
+                        processJob(job)
+                    } catch (exception: Exception) {
+                        Log.e(TAG, "Unexpected local error while processing claimed SMS job", exception)
+                        rejectClaimedJob(
+                            job.optLong("id", 0L),
+                            job.optString("request_id", "").trim(),
+                            "ANDROID_GATEWAY_PROCESSING_ERROR",
+                            "Gateway could not process the claimed SMS job; reporting failure to Main Server"
+                        )
+                    }
                 },
 
                 onFailure = { exception ->
@@ -525,7 +539,18 @@ class GatewayService : Service() {
                     updateStatus("Main Server poll failed: $detail — retrying")
                     scheduleRetryPoll()
                 }
-            )
+                )
+            } catch (exception: Exception) {
+                // Never let an unexpected response/callback exception leave
+                // requestInProgress=true forever. The previous implementation
+                // could silently swallow callback exceptions in ApiClient and
+                // permanently stop this service's polling loop.
+                requestInProgress = false
+                Log.e(TAG, "Unexpected error while handling Main Server poll response", exception)
+                setServerState(STATE_FAILED)
+                updateStatus("Poll response handling failed — retrying")
+                scheduleRetryPoll()
+            }
         }
     }
 
