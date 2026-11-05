@@ -31,6 +31,17 @@ class GatewayService : Service() {
     @Volatile
     private var resultReporting = false
 
+    // Poll state is tracked separately from SMS/result work. If a callback is
+    // unexpectedly lost, the watchdog can safely release only the stale poll.
+    @Volatile
+    private var pollRequestInFlight = false
+
+    @Volatile
+    private var pollRequestStartedAtMs = 0L
+
+    @Volatile
+    private var pollAttemptSequence = 0L
+
     private val handler = Handler(Looper.getMainLooper())
 
     private var currentStartId = 0
@@ -72,6 +83,42 @@ class GatewayService : Service() {
             if (!requestInProgress) {
                 pollServer()
             }
+        }
+    }
+
+    /**
+     * Recover only a stale HTTP poll. SMS submission and result reporting may
+     * legitimately take longer, so they are never reset by this watchdog.
+     */
+    private val pollWatchdogRunnable = object : Runnable {
+        override fun run() {
+            if (!serviceRunning) return
+
+            val startedAt = pollRequestStartedAtMs
+            val age = if (startedAt > 0L) {
+                System.currentTimeMillis() - startedAt
+            } else {
+                0L
+            }
+
+            if (pollRequestInFlight && age > POLL_REQUEST_STALE_TIMEOUT_MS) {
+                val staleAttempt = pollAttemptSequence
+                pollAttemptSequence += 1L // Ignore any late callback from this attempt.
+                pollRequestInFlight = false
+                pollRequestStartedAtMs = 0L
+                if (!resultReporting) requestInProgress = false
+
+                Log.e(
+                    TAG,
+                    "Poll watchdog recovered stale request: attempt=$staleAttempt age_ms=$age"
+                )
+                setServerState(STATE_FAILED)
+                updateStatus("Main Server poll timed out — reconnecting")
+                scheduleImmediatePoll()
+            }
+
+            handler.removeCallbacks(this)
+            handler.postDelayed(this, POLL_WATCHDOG_INTERVAL_MS)
         }
     }
 
@@ -274,11 +321,12 @@ class GatewayService : Service() {
     private fun startGateway(startId: Int) {
 
         if (serviceRunning) {
-            Log.i(TAG, "Gateway is already running; ensuring polling is scheduled")
-            if (!requestInProgress) {
-                handler.removeCallbacks(pollRunnable)
-                handler.post(pollRunnable)
-            }
+            Log.i(TAG, "Gateway is already running; ensuring poll loop is scheduled")
+            if (gatewayWakeLock?.isHeld != true) acquireGatewayWakeLock()
+            handler.removeCallbacks(pollRunnable)
+            handler.post(pollRunnable)
+            handler.removeCallbacks(pollWatchdogRunnable)
+            handler.postDelayed(pollWatchdogRunnable, POLL_WATCHDOG_INTERVAL_MS)
             return
         }
 
@@ -402,6 +450,8 @@ class GatewayService : Service() {
 
             handler.removeCallbacks(pollRunnable)
             handler.post(pollRunnable)
+            handler.removeCallbacks(pollWatchdogRunnable)
+            handler.postDelayed(pollWatchdogRunnable, POLL_WATCHDOG_INTERVAL_MS)
 
         } catch (exception: Exception) {
             Log.e(TAG, "Unable to start gateway service", exception)
@@ -443,110 +493,107 @@ class GatewayService : Service() {
         }
 
         requestInProgress = true
+        pollRequestInFlight = true
+        pollRequestStartedAtMs = System.currentTimeMillis()
+        val attemptId = ++pollAttemptSequence
         setServerState(STATE_CONNECTING)
 
+        Log.i(TAG, "Starting authenticated Main Server poll: attempt=$attemptId")
+
         ApiClient.pollGatewayJob { result ->
+            // A watchdog-recovered request may still deliver a late callback.
+            // Ignore it so it cannot interfere with a newer poll or SMS job.
+            if (attemptId != pollAttemptSequence) {
+                Log.w(TAG, "Ignoring late poll callback: attempt=$attemptId")
+                return@pollGatewayJob
+            }
+
+            pollRequestInFlight = false
+            pollRequestStartedAtMs = 0L
+
+            if (!serviceRunning) {
+                requestInProgress = false
+                return@pollGatewayJob
+            }
+
             try {
-                if (!serviceRunning) {
-                    requestInProgress = false
-                    return@pollGatewayJob
-                }
-
                 result.fold(
-                onSuccess = { response ->
+                    onSuccess = { response ->
+                        val job = response.optJSONObject("job")
 
-                    val job = response.optJSONObject("job")
-
-                    if (!response.optBoolean("ok", false)) {
-                        requestInProgress = false
-
-                        setServerState(STATE_FAILED)
-                        updateStatus("Invalid server response")
-                        scheduleRetryPoll()
-
-                        return@fold
-                    }
-
-                    // Server has accepted the authenticated poll request.
-                    setServerState(STATE_CONNECTED)
-
-                    val diagnosticCode = response.optString("diagnostic_code", "POLL_OK")
-                        .ifBlank { "POLL_OK" }
-                    val diagnosticMessage = response.optString("diagnostic_message", "")
-                        .replace(Regex("[\r\n\t]+"), " ")
-                        .take(220)
-                    val nextAction = response.optString("next_action", "")
-                        .replace(Regex("[\r\n\t]+"), " ")
-                        .take(180)
-
-                    Log.i(
-                        TAG,
-                        "Main Server poll accepted: http=${response.optInt("_httpStatus", 200)}, " +
-                            "poll_request_id=${response.optString("poll_request_id", "")}, " +
-                            "code=$diagnosticCode, " +
-                            "device=${response.optJSONObject("device")?.optString("code", "unknown")}, " +
-                            "message=$diagnosticMessage, next=$nextAction"
-                    )
-
-                    if (job == null) {
-                        requestInProgress = false
-                        if (response.optBoolean("busy", false)) {
-                            updateStatus("Connected — previous SMS result is pending")
-                            // Avoid rapid empty responses while Main Server is
-                            // holding a job in `sending` state.
+                        if (!response.optBoolean("ok", false)) {
+                            requestInProgress = false
+                            setServerState(STATE_FAILED)
+                            updateStatus("Invalid server response")
                             scheduleRetryPoll()
-                        } else {
-                            val visibleDiagnostic = when (diagnosticCode) {
-                                "SMS_ASSIGNED_TO_DIFFERENT_DEVICE" -> "SMS queue is assigned to another device"
-                                "QUEUED_JOB_NOT_CLAIMED" -> "SMS is queued but Main Server could not claim it"
-                                "NO_QUEUED_SMS_FOR_DEVICE" -> "Connected — no SMS assigned to this device"
-                                else -> diagnosticMessage.ifBlank { "Connected — waiting for SMS jobs" }
-                            }
-                            updateStatus(visibleDiagnostic)
-                            // Keep one long-poll request active continuously. The Main
-                            // Server returns immediately when a new queue row appears.
-                            scheduleImmediatePoll()
+                            return@fold
                         }
-                        return@fold
-                    }
 
-                    updateStatus("SMS job received from Main Server — preparing selected SIM")
-                    try {
-                        processJob(job)
-                    } catch (exception: Exception) {
-                        Log.e(TAG, "Unexpected local error while processing claimed SMS job", exception)
-                        rejectClaimedJob(
-                            job.optLong("id", 0L),
-                            job.optString("request_id", "").trim(),
-                            "ANDROID_GATEWAY_PROCESSING_ERROR",
-                            "Gateway could not process the claimed SMS job; reporting failure to Main Server"
+                        // A successful response from device_poll.php confirms
+                        // token authentication and Main Server reachability.
+                        setServerState(STATE_CONNECTED)
+
+                        val diagnosticCode = response.optString("diagnostic_code", "POLL_OK")
+                            .ifBlank { "POLL_OK" }
+                        val diagnosticMessage = response.optString("diagnostic_message", "")
+                            .replace(Regex("[\\r\\n\\t]+"), " ")
+                            .take(220)
+                        val nextAction = response.optString("next_action", "")
+                            .replace(Regex("[\\r\\n\\t]+"), " ")
+                            .take(180)
+
+                        Log.i(
+                            TAG,
+                            "Main Server poll accepted: http=${response.optInt("_httpStatus", 200)}, " +
+                                "poll_request_id=${response.optString("poll_request_id", "")}, " +
+                                "code=$diagnosticCode, " +
+                                "device=${response.optJSONObject("device")?.optString("code", "unknown")}, " +
+                                "message=$diagnosticMessage, next=$nextAction"
                         )
+
+                        if (job == null) {
+                            requestInProgress = false
+                            if (response.optBoolean("busy", false)) {
+                                updateStatus("Connected — previous SMS result is pending")
+                                scheduleRetryPoll()
+                            } else {
+                                val visibleDiagnostic = when (diagnosticCode) {
+                                    "SMS_ASSIGNED_TO_DIFFERENT_DEVICE" -> "SMS queue is assigned to another device"
+                                    "QUEUED_JOB_NOT_CLAIMED" -> "SMS is queued but Main Server could not claim it"
+                                    "NO_QUEUED_SMS_FOR_DEVICE" -> "Connected — no SMS assigned to this device"
+                                    else -> diagnosticMessage.ifBlank { "Connected — waiting for SMS jobs" }
+                                }
+                                updateStatus(visibleDiagnostic)
+                                scheduleImmediatePoll()
+                            }
+                            return@fold
+                        }
+
+                        updateStatus("SMS job received from Main Server — preparing selected SIM")
+                        processJob(job)
+                    },
+
+                    onFailure = { exception ->
+                        requestInProgress = false
+
+                        val detail = exception.message
+                            ?.replace(Regex("[\\r\\n\\t]+"), " ")
+                            ?.take(220)
+                            ?.ifBlank { exception.javaClass.simpleName }
+                            ?: exception.javaClass.simpleName
+
+                        Log.e(TAG, "Gateway polling failed: $detail", exception)
+                        setServerState(STATE_FAILED)
+                        updateStatus("Main Server poll failed: $detail — retrying")
+                        scheduleRetryPoll()
                     }
-                },
-
-                onFailure = { exception ->
-                    requestInProgress = false
-
-                    val detail = exception.message
-                        ?.replace(Regex("[\r\n\t]+"), " ")
-                        ?.take(220)
-                        ?.ifBlank { exception.javaClass.simpleName }
-                        ?: exception.javaClass.simpleName
-
-                    Log.e(TAG, "Gateway polling failed: $detail", exception)
-
-                    setServerState(STATE_FAILED)
-                    updateStatus("Main Server poll failed: $detail — retrying")
-                    scheduleRetryPoll()
-                }
                 )
             } catch (exception: Exception) {
-                // Never let an unexpected response/callback exception leave
-                // requestInProgress=true forever. The previous implementation
-                // could silently swallow callback exceptions in ApiClient and
-                // permanently stop this service's polling loop.
+                // ApiClient deliberately isolates callback exceptions. Handle
+                // them here so an unexpected parsing/job error cannot leave
+                // requestInProgress=true forever and silently stop polling.
                 requestInProgress = false
-                Log.e(TAG, "Unexpected error while handling Main Server poll response", exception)
+                Log.e(TAG, "Unexpected error while handling poll response", exception)
                 setServerState(STATE_FAILED)
                 updateStatus("Poll response handling failed — retrying")
                 scheduleRetryPoll()
@@ -974,6 +1021,10 @@ class GatewayService : Service() {
         resultReporting = false
 
         handler.removeCallbacks(pollRunnable)
+        handler.removeCallbacks(pollWatchdogRunnable)
+        pollAttemptSequence += 1L
+        pollRequestInFlight = false
+        pollRequestStartedAtMs = 0L
         releaseGatewayWakeLock()
 
         saveServiceRunning(false)
@@ -1090,6 +1141,10 @@ class GatewayService : Service() {
         resultReporting = false
 
         handler.removeCallbacks(pollRunnable)
+        handler.removeCallbacks(pollWatchdogRunnable)
+        pollAttemptSequence += 1L
+        pollRequestInFlight = false
+        pollRequestStartedAtMs = 0L
         releaseGatewayWakeLock()
 
         saveServiceRunning(false)
@@ -1124,6 +1179,9 @@ class GatewayService : Service() {
 
         private const val IMMEDIATE_POLL_DELAY_MS = 150L
         private const val RETRY_POLL_DELAY_MS = 3000L
+        private const val POLL_WATCHDOG_INTERVAL_MS = 15000L
+        // Connect timeout (15s) + read timeout (45s) leaves room for hosting latency.
+        private const val POLL_REQUEST_STALE_TIMEOUT_MS = 75000L
 
         private const val PREF_SERVICE_RUNNING = "service_running"
         private const val PREF_SERVER_STATE = "server_state"
