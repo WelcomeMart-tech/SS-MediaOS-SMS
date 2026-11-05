@@ -458,15 +458,37 @@ class GatewayService : Service() {
                     // Server has accepted the authenticated poll request.
                     setServerState(STATE_CONNECTED)
 
+                    val diagnosticCode = response.optString("diagnostic_code", "POLL_OK")
+                        .ifBlank { "POLL_OK" }
+                    val diagnosticMessage = response.optString("diagnostic_message", "")
+                        .replace(Regex("[\r\n\t]+"), " ")
+                        .take(220)
+                    val nextAction = response.optString("next_action", "")
+                        .replace(Regex("[\r\n\t]+"), " ")
+                        .take(180)
+
+                    Log.i(
+                        TAG,
+                        "Main Server poll accepted: code=$diagnosticCode, " +
+                            "device=${response.optJSONObject("device")?.optString("code", "unknown")}, " +
+                            "message=$diagnosticMessage, next=$nextAction"
+                    )
+
                     if (job == null) {
                         requestInProgress = false
                         if (response.optBoolean("busy", false)) {
-                            updateStatus("Connected — a previous SMS job is still awaiting its result acknowledgement")
+                            updateStatus("Connected — previous SMS result is pending")
                             // Avoid rapid empty responses while Main Server is
                             // holding a job in `sending` state.
                             scheduleRetryPoll()
                         } else {
-                            updateStatus("Connected — waiting for SMS jobs")
+                            val visibleDiagnostic = when (diagnosticCode) {
+                                "SMS_ASSIGNED_TO_DIFFERENT_DEVICE" -> "SMS queue is assigned to another device"
+                                "QUEUED_JOB_NOT_CLAIMED" -> "SMS is queued but Main Server could not claim it"
+                                "NO_QUEUED_SMS_FOR_DEVICE" -> "Connected — no SMS assigned to this device"
+                                else -> diagnosticMessage.ifBlank { "Connected — waiting for SMS jobs" }
+                            }
+                            updateStatus(visibleDiagnostic)
                             // Keep one long-poll request active continuously. The Main
                             // Server returns immediately when a new queue row appears.
                             scheduleImmediatePoll()
