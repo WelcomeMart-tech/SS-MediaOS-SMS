@@ -400,6 +400,14 @@ object ApiClient {
                     body = JSONObject()
                 )
 
+                Log.i(
+                    "ApiClient",
+                    "Gateway poll HTTP ${response.optInt("_httpStatus", 200)}; " +
+                        "ok=${response.optBoolean("ok", false)}; " +
+                        "diagnostic=${response.optString("diagnostic_code", response.optString("error_code", "none"))}; " +
+                        "poll_request_id=${response.optString("poll_request_id", "none")}"
+                )
+
                 ensureSuccess(
                     response,
                     "GATEWAY_POLL_FAILED: Could not retrieve the SMS queue."
@@ -631,19 +639,41 @@ object ApiClient {
         httpStatus: Int,
         fallbackCode: String
     ): String {
-        val code = response
-            .optString("code", fallbackCode)
-            .trim()
-            .takeIf { it.isNotBlank() }
+        // Main Server diagnostic endpoints use different but documented keys:
+        // some return `error` + `diagnostic_code` + `diagnostic_message`, while
+        // older endpoints return `code` + `message`. Preserve either contract.
+        val code = sequenceOf(
+            response.optString("diagnostic_code", ""),
+            response.optString("error_code", ""),
+            response.optString("code", ""),
+            response.optString("error", "")
+        ).map { it.trim() }.firstOrNull { it.isNotBlank() }
             ?: fallbackCode
 
-        val message = response
-            .optString("message", "Request was rejected by the server.")
-            .trim()
-            .takeIf { it.isNotBlank() }
+        val message = sequenceOf(
+            response.optString("diagnostic_message", ""),
+            response.optString("message", ""),
+            response.optString("error_description", "")
+        ).map { it.trim() }.firstOrNull { it.isNotBlank() }
             ?: "Request was rejected by the server."
 
-        return "$code: $message (HTTP $httpStatus)"
+        val nextAction = response.optString("next_action", "")
+            .replace(Regex("[\\r\\n\\t]+"), " ")
+            .trim()
+            .take(180)
+
+        return buildString {
+            append(code)
+            append(": ")
+            append(message.take(260))
+            append(" (HTTP ")
+            append(httpStatus)
+            append(")")
+            if (nextAction.isNotBlank()) {
+                append(". Next: ")
+                append(nextAction)
+            }
+        }
     }
 
     /**
