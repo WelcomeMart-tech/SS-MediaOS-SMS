@@ -132,18 +132,11 @@ object ApiClient {
                 }
 
                 /*
-                 * Do not clear the existing gateway token just because the
-                 * operator re-runs the same institution diagnostic. This
-                 * diagnostic is read/verify-only; deleting the token here
-                 * silently disconnects an already activated gateway and
-                 * causes device_poll.php to return 401 until re-activation.
-                 *
-                 * SecureConfig.saveOrganizationIdentity() already clears
-                 * verification/token when the institution code or mobile
-                 * actually changes. saveSettings() also clears them when
-                 * the Company API Key changes. A server-side verification
-                 * rejection below still clears verification safely.
+                 * Remove an old activation token before a new diagnostic.
+                 * A previous successful verification must not authorize
+                 * a new institution code or API key.
                  */
+                SecureConfig.clearDeviceToken(context)
 
                 val deviceCode = SecureConfig
                     .getDeviceCode(context)
@@ -919,8 +912,9 @@ object ApiClient {
     ) {
         try {
             callback(result)
-        } catch (_: Exception) {
-            // A UI callback exception must not terminate the worker.
+        } catch (exception: Exception) {
+            // Keep the API worker alive, but never hide callback failures.
+            Log.e("ApiClient", "API callback failed", exception)
         }
     }
 }
