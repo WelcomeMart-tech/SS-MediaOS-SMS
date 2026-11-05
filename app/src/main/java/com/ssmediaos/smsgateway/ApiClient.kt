@@ -11,10 +11,15 @@ import java.util.concurrent.Executors
 
 object ApiClient {
 
+    // Keep long-poll requests isolated so a 15-second queue wait cannot block
+    // activation, result callbacks, or other Main Server API operations.
     private val executor = Executors.newSingleThreadExecutor()
+    private val pollExecutor = Executors.newSingleThreadExecutor()
 
     private const val CONNECT_TIMEOUT = 15000
-    private const val READ_TIMEOUT = 30000
+    // Main Server currently long-polls for up to 15 seconds. Keep a generous
+    // read timeout for shared-hosting latency without allowing an endless call.
+    private const val READ_TIMEOUT = 45000
 
     private const val DEFAULT_SERVER_URL =
         "https://otp.ssmediaos.in"
@@ -382,11 +387,16 @@ object ApiClient {
     fun pollGatewayJob(
         callback: (Result<JSONObject>) -> Unit
     ) {
-        executor.execute {
+        pollExecutor.execute {
             val result = runCatching {
                 val context = AppContextHolder.context
 
                 val gatewayToken = getDeviceToken(context)
+                Log.i(
+                    "ApiClient",
+                    "Starting Main Server poll: endpoint=$DEVICE_POLL_PATH, " +
+                        "gateway_token_present=${gatewayToken.isNotBlank()}"
+                )
 
                 val response = request(
                     endpoint = buildEndpoint(
@@ -912,9 +922,8 @@ object ApiClient {
     ) {
         try {
             callback(result)
-        } catch (exception: Exception) {
-            // Keep the API worker alive, but never hide callback failures.
-            Log.e("ApiClient", "API callback failed", exception)
+        } catch (_: Exception) {
+            // A UI callback exception must not terminate the worker.
         }
     }
 }
