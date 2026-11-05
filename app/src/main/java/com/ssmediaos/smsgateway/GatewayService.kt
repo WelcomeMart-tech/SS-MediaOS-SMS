@@ -15,6 +15,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.PowerManager
 import android.util.Log
 import org.json.JSONObject
 import java.util.concurrent.ConcurrentHashMap
@@ -34,6 +35,10 @@ class GatewayService : Service() {
 
     private var currentStartId = 0
     private var receiverRegistered = false
+
+    // Keep the CPU awake while the user has explicitly enabled the always-on SMS gateway.
+    // Released whenever the foreground service stops or is destroyed.
+    private var gatewayWakeLock: PowerManager.WakeLock? = null
 
     private val statusPrefsName = "ss_mediaos_gateway_status"
 
@@ -346,6 +351,7 @@ class GatewayService : Service() {
 
             saveServiceRunning(false)
             setServerState(STATE_FAILED)
+            updateStatus("Gateway not started: allow SMS permission in Android App Settings")
 
             stopSelf(startId)
             return
@@ -381,6 +387,7 @@ class GatewayService : Service() {
             serviceRunning = true
             requestInProgress = false
             resultReporting = false
+            acquireGatewayWakeLock()
 
             saveServiceRunning(true)
             setServerState(STATE_CONNECTING)
@@ -397,6 +404,7 @@ class GatewayService : Service() {
 
             serviceRunning = false
             requestInProgress = false
+            releaseGatewayWakeLock()
 
             saveServiceRunning(false)
             setServerState(STATE_FAILED)
@@ -469,7 +477,9 @@ class GatewayService : Service() {
 
                     Log.i(
                         TAG,
-                        "Main Server poll accepted: code=$diagnosticCode, " +
+                        "Main Server poll accepted: http=${response.optInt("_httpStatus", 200)}, " +
+                            "poll_request_id=${response.optString("poll_request_id", "")}, " +
+                            "code=$diagnosticCode, " +
                             "device=${response.optJSONObject("device")?.optString("code", "unknown")}, " +
                             "message=$diagnosticMessage, next=$nextAction"
                     )
@@ -939,6 +949,7 @@ class GatewayService : Service() {
         resultReporting = false
 
         handler.removeCallbacks(pollRunnable)
+        releaseGatewayWakeLock()
 
         saveServiceRunning(false)
         setServerState(STATE_STOPPED)
@@ -952,6 +963,43 @@ class GatewayService : Service() {
 
         stopSelf()
         Log.i(TAG, "Gateway service stopped")
+    }
+
+    /**
+     * A foreground service alone does not guarantee the CPU stays awake while
+     * the screen is off. Hold a partial wake lock only while the user-enabled
+     * gateway is active so its long-poll loop can continue in screen-off use.
+     */
+    private fun acquireGatewayWakeLock() {
+        try {
+            val existing = gatewayWakeLock
+            if (existing?.isHeld == true) return
+
+            val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+            gatewayWakeLock = powerManager.newWakeLock(
+                PowerManager.PARTIAL_WAKE_LOCK,
+                "$packageName:SmsGatewayPolling"
+            ).apply {
+                setReferenceCounted(false)
+                acquire()
+            }
+            Log.i(TAG, "Gateway partial wake lock acquired")
+        } catch (exception: Exception) {
+            Log.e(TAG, "Could not acquire gateway wake lock", exception)
+            updateStatus("Gateway is running, but Android could pause polling while the screen is off")
+        }
+    }
+
+    private fun releaseGatewayWakeLock() {
+        try {
+            gatewayWakeLock?.let { lock ->
+                if (lock.isHeld) lock.release()
+            }
+        } catch (exception: Exception) {
+            Log.w(TAG, "Could not release gateway wake lock", exception)
+        } finally {
+            gatewayWakeLock = null
+        }
     }
 
     private fun createNotificationChannel() {
@@ -1017,6 +1065,7 @@ class GatewayService : Service() {
         resultReporting = false
 
         handler.removeCallbacks(pollRunnable)
+        releaseGatewayWakeLock()
 
         saveServiceRunning(false)
         setServerState(STATE_STOPPED)
