@@ -137,12 +137,11 @@ object ApiClient {
                 }
 
                 /*
-                 * Remove an old activation token before a new diagnostic.
-                 * A previous successful verification must not authorize
-                 * a new institution code or API key.
+                 * Diagnostics are read/verify-only. Do not rotate or clear
+                 * an already active gateway token just because an operator
+                 * checks the same institution again. SecureConfig clears
+                 * activation when the API key or institution identity changes.
                  */
-                SecureConfig.clearDeviceToken(context)
-
                 val deviceCode = SecureConfig
                     .getDeviceCode(context)
                     .trim()
@@ -322,9 +321,43 @@ object ApiClient {
                         "COMPANY_API_KEY_REQUIRED: Enter the Company API Key."
                     )
 
+                if (!SecureConfig.isOrganizationVerified(context)) {
+                    throw IOException(
+                        "INSTITUTION_NOT_VERIFIED: Verify the institution with Main Server before activation."
+                    )
+                }
+
+                val institutionId = SecureConfig
+                    .getOrganizationId(context)
+                    .trim()
+                    .toLongOrNull()
+                    ?.takeIf { it > 0L }
+                    ?: throw IOException(
+                        "INSTITUTION_ID_MISSING: Main Server verification did not save a valid institution ID."
+                    )
+
+                val institutionCode = SecureConfig
+                    .getOrganizationCode(context)
+                    .trim()
+                    .takeIf { it.isNotEmpty() }
+                    ?: throw IOException(
+                        "INSTITUTION_CODE_MISSING: Main Server verification did not save the institution code."
+                    )
+
+                // Activation rotates the server-side token. Clear the old one
+                // before the request so a timeout can never leave Android
+                // polling with a token that Main Server may have invalidated.
+                SecureConfig.clearDeviceToken(context)
+
                 val body = JSONObject()
                     .put("deviceCode", deviceCode)
                     .put("companyApiKey", companyApiKey)
+                    .put("institutionId", institutionId)
+                    .put("institution_id", institutionId)
+                    .put("organizationId", institutionId)
+                    .put("institutionCode", institutionCode)
+                    .put("institution_code", institutionCode)
+                    .put("organizationCode", institutionCode)
 
                 val response = request(
                     endpoint = buildEndpoint(
@@ -354,6 +387,15 @@ object ApiClient {
                     )
                 }
 
+                val returnedInstitutionId = response.optLong("institutionId", institutionId)
+                val returnedCompanyId = response.optLong("companyId", 0L)
+                if (returnedInstitutionId != institutionId) {
+                    SecureConfig.clearDeviceToken(context)
+                    throw IOException(
+                        "ACTIVATION_INSTITUTION_MISMATCH: Main Server activated a different institution."
+                    )
+                }
+
                 val deviceToken = response
                     .optString("deviceToken")
                     .trim()
@@ -373,6 +415,12 @@ object ApiClient {
                         "DEVICE_TOKEN_SAVE_FAILED: Could not securely save the device token."
                     )
                 }
+
+                Log.i(
+                    "ApiClient",
+                    "Gateway activation succeeded: institution_id=$returnedInstitutionId, " +
+                        "company_id=$returnedCompanyId, device_code=$deviceCode"
+                )
 
                 response
             }
