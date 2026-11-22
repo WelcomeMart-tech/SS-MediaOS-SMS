@@ -266,28 +266,28 @@ class GatewayService : Service() {
         when (intent?.action) {
 
             ACTION_STOP -> {
-                // Only an explicit user Deactivate/Unlink action clears the
-                // persistent enabled flag. Android process/service recreation
-                // must never be interpreted as a manual deactivation.
-                Log.i(TAG, "Manual Gateway deactivation requested")
+                // Only an explicit in-app Stop action disables auto-resume.
+                // commit() is intentional: the preference must be durable before
+                // Android tears this Service process down.
                 setGatewayEnabled(false)
+                Log.i(TAG, "Gateway manually disabled by user")
                 stopGateway()
                 return START_NOT_STICKY
             }
 
             ACTION_START -> {
-                // Persist the user's choice before starting the foreground
-                // service so a later OS process restart can restore it.
+                // User explicitly enabled the Gateway. Keep this preference across
+                // process death, normal reboot and app task dismissal.
                 setGatewayEnabled(true)
                 currentStartId = startId
                 startGateway(startId)
             }
 
             null -> {
-                // START_STICKY may recreate the service with a null Intent.
-                // Resume only when the user had previously enabled the Gateway.
+                // Android may recreate a START_STICKY service with a null Intent.
+                // Resume only if the user had previously enabled it.
                 if (!isGatewayEnabled()) {
-                    Log.i(TAG, "Service recreated but Gateway is manually disabled")
+                    Log.i(TAG, "Sticky restart ignored: Gateway is manually disabled")
                     stopSelf(startId)
                     return START_NOT_STICKY
                 }
@@ -302,7 +302,14 @@ class GatewayService : Service() {
             }
         }
 
-        return if (serviceRunning) START_STICKY else START_NOT_STICKY
+        return if (isGatewayEnabled()) {
+            // Keep START_STICKY even during a transient reconnect state. If Android
+            // kills the process, it can recreate the Service and the persisted
+            // enabled preference decides whether it may resume.
+            START_STICKY
+        } else {
+            START_NOT_STICKY
+        }
     }
 
     private fun registerSmsResultReceiver() {
@@ -372,14 +379,12 @@ class GatewayService : Service() {
         // Do not start polling if the authoritative institution identity is incomplete.
         val verifiedInstitutionId = SecureConfig.getOrganizationId(this).trim()
         val verifiedInstitutionName = SecureConfig.getOrganizationName(this).trim()
-        // Institution Code is mutable metadata. It is not a durable device
-        // identity and must not be required to keep an already activated
-        // Gateway online. The Main Server token is authoritative for routing.
-        if (verifiedInstitutionId.isBlank() || verifiedInstitutionName.isBlank()) {
+        val verifiedInstitutionCode = SecureConfig.getOrganizationCode(this).trim()
+        if (verifiedInstitutionId.isBlank() || verifiedInstitutionName.isBlank() || verifiedInstitutionCode.isBlank()) {
             Log.w(TAG, "Gateway start blocked: verified institution identity is incomplete")
             saveServiceRunning(false)
             setServerState(STATE_FAILED)
-            updateStatus("Verified institution identity is incomplete")
+            updateStatus("Institution ID, name and code must be verified first")
             stopSelf(startId)
             return
         }
@@ -648,14 +653,53 @@ class GatewayService : Service() {
             return
         }
 
-        // Tenant isolation is enforced by Main Server before a job is returned:
-        // device_poll.php authenticates the Gateway token and only claims rows
-        // matching that registered device_id + company_id + institution_id.
-        // Client Server IDs and Main Server IDs are separate namespaces, and
-        // Institution Codes are mutable. Neither is compared against a job here.
-        // The authenticated Main Server device-token scope is authoritative.
-        // Keep local activation/verification as a prerequisite; never remove
-        // the server-side device, company or institution ownership checks.
+        // Institution isolation: both the immutable database ID and exact
+        // institution code must match the one verified on this gateway.
+        val verifiedInstitutionId = SecureConfig.getOrganizationId(this).trim()
+        val verifiedInstitutionCode = SecureConfig.getOrganizationCode(this).trim()
+
+        val jobInstitutionId = sequenceOf(
+            job.optString("institution_id", ""),
+            job.optString("institutionId", ""),
+            job.optString("organization_id", ""),
+            job.optString("organizationId", "")
+        ).map { it.trim() }.firstOrNull { it.isNotBlank() }.orEmpty()
+
+        val jobInstitutionCode = sequenceOf(
+            job.optString("institution_code", ""),
+            job.optString("institutionCode", ""),
+            job.optString("organization_code", ""),
+            job.optString("organizationCode", "")
+        ).map { it.trim() }.firstOrNull { it.isNotBlank() }.orEmpty()
+
+        // device_poll.php authenticates the gateway token and selects queue rows
+        // scoped to that device's company_id + institution_id. Some deployed
+        // versions return only id/request_id/recipient/message in the job JSON,
+        // so institution fields may legitimately be absent. Require the locally
+        // verified identity, and compare server-returned identity whenever it is
+        // present; do not reject a tenant-scoped job merely because older poll
+        // responses omit duplicate institution metadata.
+        val institutionIdMismatch =
+            jobInstitutionId.isNotBlank() &&
+                jobInstitutionId != verifiedInstitutionId
+        val institutionCodeMismatch =
+            jobInstitutionCode.isNotBlank() &&
+                normalizeInstitutionCode(jobInstitutionCode) !=
+                normalizeInstitutionCode(verifiedInstitutionCode)
+
+        if (
+            verifiedInstitutionId.isBlank() ||
+            verifiedInstitutionCode.isBlank() ||
+            institutionIdMismatch ||
+            institutionCodeMismatch
+        ) {
+            Log.e(TAG, "SMS job blocked: verified institution identity is missing or server identity mismatched")
+            rejectClaimedJob(
+                jobId, requestId, "INSTITUTION_MISMATCH",
+                "SMS blocked: job does not belong to this verified institution"
+            )
+            return
+        }
 
         updateStatus("Processing SMS job")
         Log.i(TAG, "Processing SMS job ID: $jobId")
@@ -918,6 +962,22 @@ class GatewayService : Service() {
     }
 
     /**
+     * Persist the user's desired Gateway state separately from the transient
+     * process/service-running state. Service destruction must never clear this.
+     */
+    private fun setGatewayEnabled(enabled: Boolean) {
+        getSharedPreferences(statusPrefsName, MODE_PRIVATE)
+            .edit()
+            .putBoolean(PREF_GATEWAY_ENABLED, enabled)
+            .commit()
+    }
+
+    private fun isGatewayEnabled(): Boolean {
+        return getSharedPreferences(statusPrefsName, MODE_PRIVATE)
+            .getBoolean(PREF_GATEWAY_ENABLED, false)
+    }
+
+    /**
      * Save whether the Android foreground gateway service is running.
      */
     private fun saveServiceRunning(running: Boolean) {
@@ -928,21 +988,6 @@ class GatewayService : Service() {
             .putBoolean(PREF_SERVICE_RUNNING, running)
             .apply()
     }
-
-    /**
-     * User intent is separate from the transient Android Service process state.
-     * PREF_GATEWAY_ENABLED survives service destruction and device reboot.
-     */
-    private fun setGatewayEnabled(enabled: Boolean) {
-        getSharedPreferences(statusPrefsName, MODE_PRIVATE)
-            .edit()
-            .putBoolean(PREF_GATEWAY_ENABLED, enabled)
-            .apply()
-    }
-
-    private fun isGatewayEnabled(): Boolean =
-        getSharedPreferences(statusPrefsName, MODE_PRIVATE)
-            .getBoolean(PREF_GATEWAY_ENABLED, false)
 
     /**
      * Save server state and the time of the latest state change.
@@ -985,8 +1030,9 @@ class GatewayService : Service() {
 
     private fun stopGateway() {
 
-        // This method is called only for an explicit ACTION_STOP. Keep the
-        // persisted enabled flag false so BootReceiver cannot restart it.
+        // This method is reached only for the explicit ACTION_STOP path.
+        // Keep the preference write here as a second guard against accidental
+        // callers that may be added later.
         setGatewayEnabled(false)
         serviceRunning = false
         requestInProgress = false
@@ -1111,6 +1157,9 @@ class GatewayService : Service() {
         handler.removeCallbacks(pollRunnable)
         releaseGatewayWakeLock()
 
+        // Runtime status is false, but do NOT clear gateway_enabled_by_user here.
+        // Android may destroy this process during memory pressure; START_STICKY
+        // and GatewayBootReceiver must be able to resume an enabled Gateway.
         saveServiceRunning(false)
         setServerState(STATE_STOPPED)
         smsJobs.clear()
