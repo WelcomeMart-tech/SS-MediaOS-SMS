@@ -4,6 +4,7 @@ import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.pm.PackageManager
+import android.content.Intent
 import android.graphics.Color
 import android.os.Build
 import android.os.Bundle
@@ -52,6 +53,8 @@ class GatewaySettingsActivity : Activity() {
     private lateinit var companyIdText: TextView
     private lateinit var simStatusText: TextView
     private lateinit var selectSimButton: Button
+    private lateinit var startGatewayButton: Button
+    private lateinit var pauseGatewayButton: Button
 
     @Volatile
     private var requestRunning = false
@@ -68,6 +71,7 @@ class GatewaySettingsActivity : Activity() {
         configureViews()
         addCompanySummaryViews()
         addSimSelectionButton()
+        addGatewayRuntimeControls()
         loadSettings()
         bindActions()
     }
@@ -176,6 +180,132 @@ class GatewaySettingsActivity : Activity() {
             )
         }
         parent.addView(selectSimButton, index.coerceAtLeast(0), params)
+    }
+
+    /** Adds explicit runtime controls without changing the existing XML layout.
+     * The user-enabled preference is shared with GatewayBootReceiver.
+     * Pausing keeps the server-issued device token; it does not unlink the device.
+     */
+    private fun addGatewayRuntimeControls() {
+        val parent = activationStatusText.parent as? ViewGroup ?: return
+        val controls = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+
+        startGatewayButton = Button(this).apply {
+            text = "Start / Resume SMS Gateway"
+            isAllCaps = false
+            setTextColor(Color.WHITE)
+            setBackgroundTintList(android.content.res.ColorStateList.valueOf(green))
+            setOnClickListener { startGatewayRuntime() }
+        }
+        pauseGatewayButton = Button(this).apply {
+            text = "Manually Pause Gateway"
+            isAllCaps = false
+            setTextColor(Color.WHITE)
+            setBackgroundTintList(android.content.res.ColorStateList.valueOf(red))
+            setOnClickListener { pauseGatewayRuntime() }
+        }
+
+        controls.addView(startGatewayButton, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        ))
+        controls.addView(pauseGatewayButton, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        ))
+
+        val index = parent.indexOfChild(activationStatusText) + 1
+        val params = when (parent) {
+            is LinearLayout -> LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(8) }
+            else -> ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+        }
+        parent.addView(controls, index.coerceAtLeast(0), params)
+        refreshRuntimeControls()
+    }
+
+    private fun runtimePreferences() = getSharedPreferences(
+        "ss_mediaos_gateway_status",
+        MODE_PRIVATE
+    )
+
+    private fun isGatewayEnabledByUser(): Boolean =
+        runtimePreferences().getBoolean("gateway_enabled_by_user", false)
+
+    private fun refreshRuntimeControls() {
+        if (!::startGatewayButton.isInitialized || !::pauseGatewayButton.isInitialized) return
+        val enabled = isGatewayEnabledByUser()
+        startGatewayButton.isEnabled = !enabled
+        pauseGatewayButton.isEnabled = enabled
+        startGatewayButton.alpha = if (enabled) 0.55f else 1f
+        pauseGatewayButton.alpha = if (enabled) 1f else 0.55f
+    }
+
+    private fun startGatewayRuntime() {
+        if (SecureConfig.getDeviceToken(this).isNullOrBlank()) {
+            setConnectionStatus("Activate the device with Main Server before starting the Gateway.", false)
+            return
+        }
+        if (!SecureConfig.isOrganizationVerified(this)) {
+            setConnectionStatus("Main Server institution verification is required before starting.", false)
+            return
+        }
+        if (SecureConfig.getSelectedSimSubscriptionId(this) == null) {
+            setConnectionStatus("Select the assigned SIM before starting the Gateway.", false)
+            requestSimPermissionThenShowList()
+            return
+        }
+        if (checkSelfPermission(Manifest.permission.SEND_SMS) != PackageManager.PERMISSION_GRANTED) {
+            setConnectionStatus("Allow SMS permission in Android App Settings before starting the Gateway.", false)
+            return
+        }
+
+        val saved = runtimePreferences().edit()
+            .putBoolean("gateway_enabled_by_user", true)
+            .commit()
+        if (!saved) {
+            setConnectionStatus("Could not save Gateway active preference.", false)
+            return
+        }
+
+        try {
+            val serviceIntent = Intent(this, GatewayService::class.java).apply {
+                action = GatewayService.ACTION_START
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(serviceIntent)
+            } else {
+                startService(serviceIntent)
+            }
+            setConnectionStatus("Gateway start requested. It will resume after a normal phone restart while enabled.", true)
+            Toast.makeText(this, "Gateway start requested", Toast.LENGTH_LONG).show()
+            refreshRuntimeControls()
+        } catch (error: Exception) {
+            runtimePreferences().edit().putBoolean("gateway_enabled_by_user", false).apply()
+            setConnectionStatus("Could not start Gateway: ${error.localizedMessage ?: error.javaClass.simpleName}", false)
+            refreshRuntimeControls()
+        }
+    }
+
+    private fun pauseGatewayRuntime() {
+        runtimePreferences().edit()
+            .putBoolean("gateway_enabled_by_user", false)
+            .commit()
+        try {
+            startService(Intent(this, GatewayService::class.java).apply {
+                action = GatewayService.ACTION_STOP
+            })
+        } catch (_: Exception) {
+            stopService(Intent(this, GatewayService::class.java))
+        }
+        setConnectionStatus("Gateway manually paused. Device registration and token are retained; SMS polling is stopped.", true)
+        Toast.makeText(this, "Gateway paused", Toast.LENGTH_SHORT).show()
+        refreshRuntimeControls()
     }
 
     private fun dp(value: Int): Int =
@@ -320,8 +450,9 @@ class GatewaySettingsActivity : Activity() {
                 result.fold(
                     onSuccess = {
                         refreshActivationStatus()
-                        setConnectionStatus("Device activated for the verified Institution.", true)
+                        setConnectionStatus("Device activated by Main Server. Starting SMS Gateway…", true)
                         Toast.makeText(this, "Device activated successfully", Toast.LENGTH_LONG).show()
+                        startGatewayRuntime()
                     },
                     onFailure = { error ->
                         refreshActivationStatus()
@@ -498,6 +629,7 @@ class GatewaySettingsActivity : Activity() {
         val active = !SecureConfig.getDeviceToken(this).isNullOrBlank()
         activationStatusText.text = if (active) "Device status: ACTIVATED" else "Device status: NOT ACTIVATED"
         activationStatusText.setTextColor(if (active) green else amber)
+        refreshRuntimeControls()
     }
 
     private fun maskMobile(value: String): String {
@@ -533,6 +665,7 @@ class GatewaySettingsActivity : Activity() {
             refreshOrganizationSummary()
             refreshActivationStatus()
             refreshSimStatus()
+            refreshRuntimeControls()
         }
     }
 }
