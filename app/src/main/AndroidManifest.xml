@@ -10,8 +10,7 @@
     <!-- The Gateway sends SMS jobs assigned to its verified organization. -->
     <uses-permission android:name="android.permission.SEND_SMS" />
 
-    <!-- Used only to inspect available SIM subscriptions for SIM selection.
-         This permission does not grant access to incoming SMS messages. -->
+    <!-- Used only to inspect available SIM subscriptions for SIM selection. -->
     <uses-permission android:name="android.permission.READ_PHONE_STATE" />
 
     <!-- Android 13+ foreground-service notification. -->
@@ -20,6 +19,9 @@
     <!-- Foreground Gateway service. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+
+    <!-- Allows the system to notify this app after a normal device reboot. -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <!-- Telephony hardware is optional so devices without SIM support can install the app. -->
     <uses-feature
@@ -59,8 +61,18 @@
             android:stopWithTask="false"
             android:foregroundServiceType="dataSync" />
 
-        <!-- Receives only this app's SMS-sent PendingIntent callbacks.
-             It does not receive or read incoming SMS messages. -->
+        <!-- Resume only a previously user-enabled Gateway after normal reboot/app update. -->
+        <receiver
+            android:name=".GatewayBootReceiver"
+            android:enabled="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Receives only this app's SMS-sent PendingIntent callbacks. -->
         <receiver
             android:name=".SmsSentReceiver"
             android:exported="false" />
@@ -68,9 +80,5 @@
         <!-- Intentionally no IncomingSmsReceiver. -->
     </application>
 
-    <!-- Intentionally omitted:
-         android.permission.READ_SMS
-         android.permission.RECEIVE_SMS
-         No incoming-SMS receiver is registered. -->
-
+    <!-- Intentionally omitted: READ_SMS and RECEIVE_SMS. -->
 </manifest>
