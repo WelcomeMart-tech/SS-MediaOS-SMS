@@ -1,1244 +1,1231 @@
 package com.ssmediaos.smsgateway
 
 import android.Manifest
-import android.app.Activity
-import android.app.AlertDialog
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.Service
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
-import android.graphics.Color
-import android.graphics.Typeface
-import android.graphics.drawable.GradientDrawable
+import android.content.pm.ServiceInfo
 import android.os.Build
-import android.os.Bundle
-import android.view.Gravity
-import android.view.View
-import android.view.ViewGroup
-import android.widget.Button
-import android.widget.FrameLayout
-import android.widget.LinearLayout
-import android.widget.ScrollView
-import android.widget.TextView
-import android.widget.Toast
+import android.os.Handler
+import android.os.IBinder
+import android.os.Looper
+import android.os.PowerManager
+import android.util.Log
+import org.json.JSONArray
+import org.json.JSONObject
+import java.util.concurrent.ConcurrentHashMap
 
-class MainActivity : Activity() {
+class GatewayService : Service() {
 
-    private lateinit var statusText: TextView
-    private lateinit var serverText: TextView
-    private lateinit var permissionText: TextView
-    private lateinit var gatewayText: TextView
-    private lateinit var content: LinearLayout
-    private lateinit var dashboardScroll: ScrollView
-    private lateinit var rootFrame: FrameLayout
-    private lateinit var pageContainer: LinearLayout
-    private var drawerOverlay: FrameLayout? = null
-    private lateinit var sentCountText: TextView
-    private lateinit var failedCountText: TextView
-    private lateinit var receivedCountText: TextView
+    @Volatile
+    private var serviceRunning = false
 
-    private var gatewayStartRequested = false
+    @Volatile
+    private var requestInProgress = false
 
-    private val navy = Color.rgb(16, 27, 53)
-    private val blue = Color.rgb(24, 119, 242)
-    private val green = Color.rgb(34, 197, 94)
-    private val backgroundColor = Color.rgb(244, 247, 252)
-    private val textDark = Color.rgb(30, 41, 59)
-    private val textMuted = Color.rgb(100, 116, 139)
-    private val white = Color.WHITE
+    @Volatile
+    private var resultReporting = false
 
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
+    // Timestamp only for the HTTP queue-poll request, not for SMS sending/result reporting.
+    @Volatile
+    private var pollStartedAtMs = 0L
 
-        window.statusBarColor = navy
-        window.navigationBarColor = navy
-        window.decorView.systemUiVisibility = 0
+    private val handler = Handler(Looper.getMainLooper())
 
-        createInterface()
-        requestRequiredPermissions()
-        updateStatus()
-    }
+    private var currentStartId = 0
+    private var receiverRegistered = false
 
-    override fun onResume() {
-        super.onResume()
+    // Keep the CPU awake while the user has explicitly enabled the always-on SMS gateway.
+    // Released whenever the foreground service stops or is destroyed.
+    private var gatewayWakeLock: PowerManager.WakeLock? = null
 
-        if (::statusText.isInitialized) {
-            updateStatus()
-            refreshSmsStats()
-        }
-    }
+    private val statusPrefsName = "ss_mediaos_gateway_status"
 
-    private fun createInterface() {
-        // One shared app shell owns the navigation drawer. Individual sections
-        // only render content; they must not create their own duplicate menus.
-        rootFrame = FrameLayout(this).apply {
-            setBackgroundColor(backgroundColor)
-        }
-        pageContainer = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setBackgroundColor(backgroundColor)
-        }
+    private data class SmsJobState(
+        val requestId: String,
+        @Volatile var totalParts: Int = 0,
+        val results: MutableMap<Int, Boolean> = mutableMapOf(),
+        @Volatile var errorCode: String? = null,
+        @Volatile var completed: Boolean = false
+    )
 
-        // Compact app bar with a working navigation menu.
-        val appBar = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(16), dp(10), dp(16), dp(10))
-            setBackgroundColor(white)
-            elevation = dp(3).toFloat()
-        }
-
-        val menuButton = TextView(this).apply {
-            text = "☰"
-            textSize = 27f
-            setTextColor(navy)
-            gravity = Gravity.CENTER
-            contentDescription = "Open navigation menu"
-            setPadding(dp(8), dp(4), dp(14), dp(4))
-            setOnClickListener { showNavigationMenu(this) }
-        }
-        appBar.addView(menuButton, LinearLayout.LayoutParams(dp(48), dp(48)))
-
-        val appBarTitle = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-        }
-        appBarTitle.addView(textView("SS MediaOS", 17f, navy, true))
-        appBarTitle.addView(textView("SMS GATEWAY • CONTROL CENTER", 10f, textMuted, true))
-        appBar.addView(appBarTitle, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-
-        val appBarStatus = TextView(this).apply {
-            text = "●"
-            textSize = 18f
-            setTextColor(green)
-            contentDescription = "Application running"
-        }
-        appBar.addView(appBarStatus)
-
-        pageContainer.addView(appBar, LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
-        ))
-
-        dashboardScroll = ScrollView(this).apply {
-            isFillViewport = true
-            clipToPadding = false
-            setPadding(0, 0, 0, dp(16))
-        }
-
-        content = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(16), dp(16), dp(16), dp(24))
-        }
-
-        // Brand header
-        val header = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(20), dp(24), dp(20), dp(22))
-            background = roundedGradient(
-                intArrayOf(
-                    Color.rgb(16, 27, 53),
-                    Color.rgb(23, 59, 112),
-                    Color.rgb(24, 119, 242)
-                ),
-                24
-            )
-            elevation = dp(4).toFloat()
-        }
-
-        val brandRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-
-        val logo = TextView(this).apply {
-            text = "SMS"
-            textSize = 19f
-            gravity = Gravity.CENTER
-            setTextColor(white)
-            setTypeface(null, Typeface.BOLD)
-            background = roundedBackground(
-                Color.rgb(36, 87, 157),
-                18
-            )
-            contentDescription = "SS MediaOS SMS Gateway logo"
-        }
-
-        brandRow.addView(
-            logo,
-            LinearLayout.LayoutParams(dp(66), dp(66))
-        )
-
-        val brandText = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(14), 0, 0, 0)
-        }
-
-        brandText.addView(
-            textView("SS MediaOS", 22f, white, true)
-        )
-
-        brandText.addView(
-            textView(
-                "SMS GATEWAY",
-                12f,
-                Color.rgb(207, 226, 255),
-                true
-            ).apply {
-                letterSpacing = 0.12f
-                setPadding(0, dp(5), 0, 0)
-            }
-        )
-
-        brandRow.addView(
-            brandText,
-            LinearLayout.LayoutParams(
-                0,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                1f
-            )
-        )
-
-        header.addView(brandRow)
-
-        header.addView(
-            textView(
-                "Smart messaging. Reliable connectivity.",
-                13f,
-                Color.rgb(230, 239, 255),
-                false
-            ).apply {
-                setPadding(0, dp(18), 0, 0)
-            }
-        )
-
-        header.addView(
-            textView("Owner: SS MediaOS", 12f, white, true).apply {
-                setPadding(0, dp(16), 0, 0)
-            }
-        )
-
-        content.addView(
-            header,
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply {
-                bottomMargin = dp(22)
-            }
-        )
-
-        // Dashboard
-        content.addView(
-            sectionTitle(
-                "Dashboard",
-                "Gateway overview and controls"
-            )
-        )
-
-        // Status cards
-        val statusRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-        }
-
-        val appCard = createStatCard(
-            "APP STATUS",
-            "RUNNING",
-            "Application",
-            green
-        )
-
-        val connectionCard = createStatCard(
-            "SERVER",
-            "CHECKING",
-            "Live connection status",
-            blue
-        )
-
-        statusRow.addView(
-            appCard,
-            LinearLayout.LayoutParams(0, dp(120), 1f).apply {
-                marginEnd = dp(7)
-            }
-        )
-
-        statusRow.addView(
-            connectionCard,
-            LinearLayout.LayoutParams(0, dp(120), 1f).apply {
-                marginStart = dp(7)
-            }
-        )
-
-        content.addView(
-            statusRow,
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply {
-                bottomMargin = dp(14)
-            }
-        )
-
-        // SMS activity summary. Counts are recorded from Android send callbacks.
-        content.addView(sectionTitle("SMS Activity", "Live counters recorded on this device"))
-
-        val smsStatsRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-        }
-        val sentCard = createStatCard("SMS SENT", "0", "Submitted by device", green)
-        val failedCard = createStatCard("SMS FAILED", "0", "Send errors", Color.rgb(220, 53, 69))
-        val receivedCard = createStatCard("SMS RECEIVED", "—", "Incoming inbox not collected", blue)
-        sentCountText = sentCard.getChildAt(1) as TextView
-        failedCountText = failedCard.getChildAt(1) as TextView
-        receivedCountText = receivedCard.getChildAt(1) as TextView
-        smsStatsRow.addView(sentCard, LinearLayout.LayoutParams(0, dp(112), 1f).apply { marginEnd = dp(5) })
-        smsStatsRow.addView(failedCard, LinearLayout.LayoutParams(0, dp(112), 1f).apply { marginStart = dp(5); marginEnd = dp(5) })
-        smsStatsRow.addView(receivedCard, LinearLayout.LayoutParams(0, dp(112), 1f).apply { marginStart = dp(5) })
-        content.addView(smsStatsRow, LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
-        ).apply { bottomMargin = dp(8) })
-        content.addView(textView(
-            "Period-wise Today / Week / Month / Year totals will display after timestamped SMS history is connected. Current local counter is a lifetime aggregate.",
-            11f, textMuted, false
-        ).apply { setPadding(dp(4), 0, dp(4), dp(14)) })
-
-        val permissionCard = createStatCard(
-            "SMS PERMISSION",
-            "CHECKING",
-            "Android permission",
-            blue
-        )
-
-        content.addView(
-            permissionCard,
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                dp(112)
-            ).apply {
-                bottomMargin = dp(22)
-            }
-        )
-
-        // Keep operational status fields initialized for the existing service/status logic.
-        // Detailed controls and settings are intentionally moved to the Sidebar so the
-        // Dashboard remains a clean overview instead of a long mixed page.
-        gatewayText = textView("Gateway service status", 1f, textMuted, false)
-        serverText = textView("Server: Not configured", 1f, textMuted, false)
-        permissionText = textView("SMS Permission: Checking", 1f, textMuted, false)
-        statusText = textView("App Status: Running", 1f, textMuted, false)
-
-        // Footer: developer credit intentionally shown only here
-        val footer = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-            setPadding(dp(10), dp(18), dp(10), dp(12))
-        }
-
-        footer.addView(
-            textView(
-                "SS MediaOS SMS Gateway",
-                14f,
-                navy,
-                true
-            )
-        )
-
-        footer.addView(
-            textView(
-                "Developed by Shivam Yadav",
-                12f,
-                textMuted,
-                false
-            ).apply {
-                setPadding(0, dp(6), 0, 0)
-            }
-        )
-
-        content.addView(footer)
-
-        dashboardScroll.addView(
-            content,
-            ViewGroup.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            )
-        )
-
-        pageContainer.addView(
-            dashboardScroll,
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                0,
-                1f
-            )
-        )
-
-        rootFrame.addView(
-            pageContainer,
-            FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.MATCH_PARENT
-            )
-        )
-        buildSharedNavigationDrawer()
-        setContentView(rootFrame)
-        refreshSmsStats()
-    }
+    private val smsJobs =
+        ConcurrentHashMap<Long, SmsJobState>()
 
     /**
-     * Creates exactly one navigation drawer for the whole Activity.
-     * Dashboard sections never create their own menu or duplicate sidebar.
+     * Keep a claimed job's final result until the Main Server acknowledges it.
      */
-    private fun buildSharedNavigationDrawer() {
-        val overlay = FrameLayout(this).apply {
-            visibility = View.GONE
-            setBackgroundColor(Color.TRANSPARENT)
-            isClickable = true
-            isFocusable = true
-        }
-
-        val scrim = View(this).apply {
-            setBackgroundColor(0x990B1730.toInt())
-            setOnClickListener { closeNavigationMenu() }
-        }
-        overlay.addView(
-            scrim,
-            FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.MATCH_PARENT
-            )
-        )
-
-        val drawer = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setBackgroundColor(white)
-            elevation = dp(18).toFloat()
-            isClickable = true
-            setPadding(0, 0, 0, dp(12))
-        }
-
-        val drawerHeader = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(22), dp(30), dp(18), dp(24))
-            background = roundedGradient(
-                intArrayOf(Color.rgb(16, 27, 53), Color.rgb(24, 119, 242)), 0
-            )
-        }
-        drawerHeader.addView(textView("SS MediaOS", 22f, white, true))
-        drawerHeader.addView(
-            textView("SMS GATEWAY", 11f, Color.rgb(219, 234, 254), true).apply {
-                setPadding(0, dp(5), 0, 0)
-                letterSpacing = 0.14f
-            }
-        )
-        drawerHeader.addView(
-            textView("Secure Organization Messaging", 12f, Color.rgb(230, 239, 255), false).apply {
-                setPadding(0, dp(13), 0, 0)
-            }
-        )
-        drawer.addView(drawerHeader)
-
-        val menuScroll = ScrollView(this).apply {
-            isFillViewport = false
-            overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
-        }
-        val menuItems = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(12), dp(16), dp(12), dp(12))
-        }
-        menuScroll.addView(menuItems)
-
-        fun addDrawerItem(label: String, icon: String, action: () -> Unit, enabled: Boolean = true) {
-            val item = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                setPadding(dp(14), 0, dp(12), 0)
-                background = roundedBackground(
-                    if (enabled) Color.rgb(247, 249, 253) else Color.rgb(250, 250, 250), 12
-                )
-                alpha = if (enabled) 1f else 0.58f
-                isClickable = true
-                isFocusable = true
-                minimumHeight = dp(50)
-                setOnClickListener {
-                    closeNavigationMenu()
-                    action()
-                }
-            }
-            item.addView(textView(icon, 18f, blue, true), LinearLayout.LayoutParams(dp(34), dp(48)))
-            item.addView(
-                textView(label, 14f, textDark, true),
-                LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-            )
-            if (!enabled) {
-                item.addView(textView("Soon", 10f, textMuted, false))
-            }
-            menuItems.addView(item, LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(50)
-            ).apply { bottomMargin = dp(7) })
-        }
-
-        addDrawerItem("OVERVIEW", "▰", { dashboardScroll.smoothScrollTo(0, 0) })
-        addDrawerItem("Dashboard", "⌂", { dashboardScroll.smoothScrollTo(0, 0) })
-        addDrawerItem("SMS Logs", "▤", {
-            showPolicyDialog("SMS Logs", "SMS log screen is not yet connected to a message-history API.\n\nSent and failed totals shown on Dashboard are local device counters. A full searchable log requires the server log endpoint and message records.")
-        })
-        addDrawerItem("Reports & Analytics", "▥", {
-            showPolicyDialog("Reports & Analytics", "Daily, weekly, monthly and yearly reporting needs timestamped SMS records from GatewayService or the server. The current local preference stores aggregate totals only, so period totals are not fabricated.")
-        })
-        addDrawerItem("GATEWAY", "▣", { showToast("Gateway options") })
-        addDrawerItem("Gateway Settings", "⚙", { openGatewaySettings() })
-        addDrawerItem("Start Gateway Service", "▶", { startGatewayService() })
-        addDrawerItem("Stop Gateway Service", "■", { stopGatewayService() })
-        addDrawerItem("Server & API Settings", "⇄", { openGatewaySettings() })
-        addDrawerItem("SMS Permissions", "♙", {
-            val sendGranted = checkSelfPermission(Manifest.permission.SEND_SMS) == PackageManager.PERMISSION_GRANTED
-            val phoneGranted = checkSelfPermission(Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED
-            val details = "SEND_SMS: ${if (sendGranted) "Granted" else "Not granted"}\n" +
-                "READ_PHONE_STATE: ${if (phoneGranted) "Granted" else "Not granted"}\n\n" +
-                "SEND_SMS is required to send authorized outgoing messages. " +
-                "READ_PHONE_STATE is used to inspect the selected SIM/subscription for multi-SIM routing. " +
-                "Incoming SMS and inbox access are not enabled."
-            showPolicyDialog("SMS Permissions", details)
-            if (!sendGranted || !phoneGranted) requestRequiredPermissions()
-        })
-        addDrawerItem("POLICIES & COMPLIANCE", "▤", { showToast("Policies and compliance") })
-        addDrawerItem("Privacy Policy", "🔒", { showPolicyDialog("Privacy Policy", privacyPolicyText()) })
-        addDrawerItem("Telecom & SMS Policy", "◉", { showPolicyDialog("Telecom & SMS Policy", telecomSmsPolicyText()) })
-        addDrawerItem("DND & Consent Policy", "✓", { showPolicyDialog("DND, Consent & Opt-out Rules", dndPolicyText()) })
-        addDrawerItem("Google Play Store Policy", "▶", { showPolicyDialog("Google Play Store Policy", playStorePolicyText()) })
-        addDrawerItem("Android Policy", "▣", { showPolicyDialog("Android App Permissions & Policy", androidPolicyText()) })
-        addDrawerItem("SYSTEM", "⌘", { showToast("System information") })
-        addDrawerItem("System Information", "ⓘ", {
-            val pm = packageManager
-            val version = try { pm.getPackageInfo(packageName, 0).versionName ?: "Unknown" } catch (_: Exception) { "Unknown" }
-            showPolicyDialog("System Information", "App: SS MediaOS SMS Gateway\nVersion: $version\nAndroid: ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})\nDevice: ${Build.MANUFACTURER} ${Build.MODEL}\nSMS permission: ${if (checkSelfPermission(Manifest.permission.SEND_SMS) == PackageManager.PERMISSION_GRANTED) "Granted" else "Not granted"}\nServer: ${SecureConfig.getServerUrl(this) ?: "Not configured"}")
-        })
-        addDrawerItem("About", "ⓘ", {
-            showPolicyDialog("About SS MediaOS SMS Gateway", "SS MediaOS SMS Gateway\nSecure, organization-linked SMS delivery through an authorized device and selected active SIM.\n\nDeveloped by Shivam Yadav.\n\nThe app processes server-authorized jobs only.")
-        })
-
-        val spacer = View(this)
-        menuItems.addView(spacer, LinearLayout.LayoutParams(1, dp(8)))
-        addDrawerItem("Logout", "⇥", {
-            AlertDialog.Builder(this)
-                .setTitle("Logout")
-                .setMessage("This app build does not have a server logout endpoint. To avoid clearing device credentials incorrectly, no local logout was performed.")
-                .setNegativeButton("Close", null)
-                .show()
-        })
-
-        drawer.addView(
-            menuScroll,
-            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
-        )
-        overlay.addView(
-            drawer,
-            FrameLayout.LayoutParams(dp(304), ViewGroup.LayoutParams.MATCH_PARENT, Gravity.START)
-        )
-        rootFrame.addView(
-            overlay,
-            FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.MATCH_PARENT
-            )
-        )
-        drawerOverlay = overlay
-    }
-
-    private fun showNavigationMenu(anchor: View) {
-        drawerOverlay?.visibility = View.VISIBLE
-    }
-
-    private fun closeNavigationMenu() {
-        drawerOverlay?.visibility = View.GONE
-    }
-
-    override fun onBackPressed() {
-        if (drawerOverlay?.visibility == View.VISIBLE) {
-            closeNavigationMenu()
-        } else {
-            super.onBackPressed()
-        }
-    }
-
-    private fun scrollToSection(tagName: String) {
-        val target = content.findViewWithTag<View>(tagName) ?: return
-        dashboardScroll.post {
-            dashboardScroll.smoothScrollTo(0, target.top)
-        }
-    }
-
-    private fun refreshSmsStats() {
-        if (!::sentCountText.isInitialized) return
-        val stats = getSharedPreferences("ss_mediaos_sms_stats", MODE_PRIVATE)
-        sentCountText.text = stats.getInt("sent_count", 0).toString()
-        failedCountText.text = stats.getInt("failed_count", 0).toString()
-        // Incoming SMS inbox access is intentionally disabled in this app.
-        receivedCountText.text = "—"
-    }
-
-    private fun showPolicyDialog(title: String, body: String) {
-        AlertDialog.Builder(this)
-            .setTitle(title)
-            .setMessage(body)
-            .setPositiveButton("Close", null)
-            .show()
-    }
-
-    private fun privacyPolicyText(): String = """
-SS MediaOS SMS Gateway — Privacy Policy
-
-Purpose
-The app sends SMS only for authorized jobs received from the configured SS MediaOS API. The organization/entity code is verified by the server; the app must not guess the organization or route messages by itself.
-
-Data handled
-Depending on the API features enabled, the app may send the device code, activation/device token, recipient number, message content required to send an authorized job, job/request ID, send result, error details and timestamps to the configured SS MediaOS server. Keep API keys and tokens private.
-
-Incoming SMS
-This app is designed not to read, collect, store, or forward personal incoming SMS or OTP inbox messages. It requires SMS-send permission only to perform authorized outbound jobs. Do not add READ_SMS or RECEIVE_SMS permissions without a separate, lawful and explicit product requirement.
-
-Use and retention
-The server operator should restrict access to authorized staff, protect data in transit using HTTPS, apply access controls, and retain message data only as long as needed for service, audit, dispute handling or legal obligations. The app's actual retention period depends on the connected server configuration.
-
-Mobile number and support
-Any registered mobile-number change must be verified by the server before it is accepted. Do not treat a number as changed solely because a user typed it into the app.
-
-Security and contact
-Do not share device tokens or API keys. For access, correction, deletion or privacy questions, contact the organization that operates your SS MediaOS account. The operator should publish its verified support contact and applicable retention details before production use.
-
-This in-app notice is a product summary, not a legal opinion. The service operator must review it against its actual backend practices and applicable law before public release.
-    """.trimIndent()
-
-    private fun telecomSmsPolicyText(): String = """
-Telecom & SMS Usage Policy
-
-1. Authorized use only
-SMS may be sent only for a valid, server-authorized job linked to a verified organization/entity account. Never use this gateway for spam, fraud, impersonation, harassment, unsolicited bulk messaging or unlawful content.
-
-2. Sender and message compliance
-The organization operating the service is responsible for using the appropriate telecom provider, registered sender/header, approved content template, principal-entity registration and other requirements that apply to its message category. Where Indian TRAI/DLT rules apply, follow the current rules and directions of TRAI, the Department of Telecommunications, the access provider and applicable law.
-
-3. Consent and purpose
-Keep evidence of recipient consent where required. Send only messages relevant to the stated purpose and permitted category. Do not reuse contact numbers for unrelated marketing.
-
-4. Delivery status
-Queued, submitted/sent, failed and delivered are different states. The app can report a device send result; a message must be marked Delivered only when a reliable delivery receipt/status is received from the telecom provider or connected API. A successful device submission is not proof of delivery.
-
-5. Security and abuse prevention
-Use HTTPS, protect tokens, limit request rates, validate recipient numbers and message lengths, maintain auditable server logs, and suspend compromised or misused devices. Never bypass telecom controls or provider restrictions.
-
-The server owner and messaging organization are responsible for legal compliance and provider configuration. This policy does not itself register a sender, header, template or DLT entity.
-    """.trimIndent()
-
-    private fun dndPolicyText(): String = """
-DND, Consent & Opt-out Rules
-
-• Respect recipient preferences and Do Not Disturb (DND) registrations according to the message category and current telecom rules.
-• Do not assume that a message is allowed merely because a phone number is available. Confirm the lawful basis/consent and permitted category before queuing it.
-• Promotional messages must follow applicable TRAI commercial-communications/DLT requirements, including sender/header, template, consent and time-window rules where applicable.
-• Service, transactional, OTP and other permitted messages must still meet the conditions applicable to that category; do not mislabel promotional content to avoid DND restrictions.
-• Provide a clear opt-out or preference-management path for messages where required, process opt-outs promptly, and keep suppression lists on the server so blocked recipients are not queued again.
-• Never use this app to evade DND, caller/customer preferences, rate limits, telecom-provider blocks or legal restrictions.
-• If consent, category, sender registration or eligibility cannot be verified by the API, the server should reject the job rather than send it.
-
-These are safety/compliance principles, not a substitute for checking the latest official TRAI and telecom-provider requirements for your exact SMS category before launch.
-    """.trimIndent()
-
-    private fun playStorePolicyText(): String = """
-Google Play Store & App Distribution Policy
-
-• Request only permissions essential to the app's disclosed core functionality.
-• Explain the SEND_SMS use clearly in the store listing and in-app disclosure. Do not request SMS permissions for unrelated features.
-• Do not read or collect incoming SMS/OTP inbox data. This app build is designed for outgoing SMS jobs and does not declare READ_SMS or RECEIVE_SMS in the manifest previously reviewed.
-• Provide an accurate privacy policy, data-safety disclosures, support contact and account/data deletion information where applicable.
-• Do not claim Play approval or policy compliance until the final manifest, app behavior, Data safety form and Play Console declarations have been reviewed against current Google requirements.
-
-This is an implementation checklist, not a statement that Google Play has approved the app.
-    """.trimIndent()
-
-    private fun androidPolicyText(): String = """
-Android Permissions & Platform Policy
-
-• SEND_SMS is a sensitive permission. It must be requested at runtime and used only for the app's disclosed outgoing-SMS feature.
-• POST_NOTIFICATIONS is requested on Android 13+ for visible notifications where required.
-• Do not add READ_SMS, RECEIVE_SMS, call-log, contacts or location permissions unless a separate legitimate feature requires them and the applicable platform/store rules permit them.
-• Keep gateway work visible through the appropriate foreground-service notification and comply with Android foreground-service type and start restrictions for the target SDK.
-• Handle permission denial gracefully; never bypass Android permission controls.
-• Protect API keys, activation tokens and device tokens. Use HTTPS and avoid logging secrets.
-
-Review the final target SDK, manifest and service implementation before release; requirements can change between Android versions.
-    """.trimIndent()
-
-    private fun createStatCard(
-        label: String,
-        value: String,
-        description: String,
-        accent: Int
-    ): LinearLayout {
-        val card = createCard()
-
-        card.addView(
-            textView(
-                label,
-                11f,
-                textMuted,
-                true
-            )
-        )
-
-        val valueText = textView(
-            value,
-            20f,
-            accent,
-            true
-        ).apply {
-            tag = when (label) {
-                "SMS PERMISSION" -> "value_SMS_PERMISSION"
-                else -> "value_$label"
-            }
-
-            setPadding(0, dp(10), 0, dp(4))
-        }
-
-        card.addView(valueText)
-
-        card.addView(
-            textView(
-                description,
-                12f,
-                textMuted,
-                false
-            )
-        )
-
-        return card
-    }
-
-    private fun sectionTitle(
-        title: String,
-        subtitle: String
-    ): LinearLayout {
-        return LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(2), 0, 0, dp(12))
-
-            addView(
-                textView(
-                    title,
-                    20f,
-                    navy,
-                    true
-                )
-            )
-
-            addView(
-                textView(
-                    subtitle,
-                    12f,
-                    textMuted,
-                    false
-                ).apply {
-                    setPadding(0, dp(4), 0, 0)
-                }
-            )
-        }
-    }
-
-    private fun createCard(): LinearLayout {
-        return LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(18), dp(18), dp(18), dp(18))
-            background = roundedBackground(white, 18)
-            elevation = dp(2).toFloat()
-        }
-    }
-
-    private fun textView(
-        value: String,
-        size: Float,
-        color: Int,
-        bold: Boolean
-    ): TextView {
-        return TextView(this).apply {
-            text = value
-            textSize = size
-            setTextColor(color)
-
-            if (bold) {
-                setTypeface(null, Typeface.BOLD)
-            }
-
-            gravity = Gravity.CENTER_VERTICAL
-        }
-    }
-
-    private fun actionButton(
-        label: String,
-        color: Int,
-        onClick: () -> Unit
-    ): Button {
-        return Button(this).apply {
-            text = label
-            textSize = 14f
-            setTextColor(white)
-            isAllCaps = false
-            background = roundedBackground(color, 12)
-            setPadding(dp(12), dp(6), dp(12), dp(6))
-
-            setOnClickListener {
-                onClick()
-            }
-        }
-    }
-
-    private fun buttonLayout(): LinearLayout.LayoutParams {
-        return LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            dp(50)
-        ).apply {
-            bottomMargin = dp(10)
-        }
-    }
-
-    private fun roundedBackground(
-        color: Int,
-        radius: Int
-    ): GradientDrawable {
-        return GradientDrawable().apply {
-            setColor(color)
-            cornerRadius = dp(radius).toFloat()
-        }
-    }
-
-    private fun roundedGradient(
-        colors: IntArray,
-        radius: Int
-    ): GradientDrawable {
-        return GradientDrawable(
-            GradientDrawable.Orientation.LEFT_RIGHT,
-            colors
-        ).apply {
-            cornerRadius = dp(radius).toFloat()
-        }
-    }
-
-    private fun requestRequiredPermissions() {
-        // SmsHelper requires both permissions: SEND_SMS for outbound messages
-        // and READ_PHONE_STATE to inspect the explicitly selected SIM.
-        val required = mutableListOf(
-            Manifest.permission.SEND_SMS,
-            Manifest.permission.READ_PHONE_STATE
-        )
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            required.add(Manifest.permission.POST_NOTIFICATIONS)
-        }
-
-        val missing = required.filter {
-            checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED
-        }
-
-        if (missing.isNotEmpty()) {
-            requestPermissions(
-                missing.toTypedArray(),
-                PERMISSION_REQUEST_CODE
-            )
-        }
-    }
-
-    override fun onRequestPermissionsResult(
-        requestCode: Int,
-        permissions: Array<out String>,
-        grantResults: IntArray
-    ) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == PERMISSION_REQUEST_CODE) {
-            updateStatus()
-            val sendGranted = checkSelfPermission(Manifest.permission.SEND_SMS) == PackageManager.PERMISSION_GRANTED
-            val phoneGranted = checkSelfPermission(Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED
-            if (sendGranted && phoneGranted) {
-                showToast("Required SMS and SIM permissions granted.")
-            } else {
-                showToast("Gateway needs both SMS and SIM permissions. You can grant them in Android App Settings.")
-            }
-        }
-    }
-
-    private fun startGatewayService() {
-        val smsGranted =
-            checkSelfPermission(Manifest.permission.SEND_SMS) ==
-                PackageManager.PERMISSION_GRANTED
-
-        val phoneStateGranted =
-            checkSelfPermission(Manifest.permission.READ_PHONE_STATE) ==
-                PackageManager.PERMISSION_GRANTED
-
-        if (!smsGranted || !phoneStateGranted) {
-            updateStatus("Grant SMS and Phone State permissions before starting the gateway.")
-            requestRequiredPermissions()
-            return
-        }
-
-        val serverUrl = SecureConfig.getServerUrl(this)
-        val deviceCode = SecureConfig.getDeviceCode(this)
-        val activationToken = SecureConfig.getActivationToken(this)
-        val deviceToken = SecureConfig.getDeviceToken(this)
-
-        if (
-            serverUrl.isNullOrBlank() ||
-            deviceCode.isNullOrBlank() ||
-            activationToken.isNullOrBlank()
-        ) {
-            updateStatus(
-                "Complete Gateway Settings before starting the gateway."
-            )
-
-            showToast(
-                "Please save the server URL, Device Code and " +
-                    "Activation Token first."
-            )
-            return
-        }
-
-        if (deviceToken.isNullOrBlank()) {
-            updateStatus(
-                "This device is not activated yet. " +
-                    "Activate it in Gateway Settings."
-            )
-
-            showToast(
-                "Activate this device before starting the gateway."
-            )
-            return
-        }
-
-        try {
-            val intent = Intent(
-                this,
-                GatewayService::class.java
-            ).apply {
-                action = GatewayService.ACTION_START
-            }
-
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                startForegroundService(intent)
-            } else {
-                startService(intent)
-            }
-
-            gatewayStartRequested = true
-
-            updateStatus(
-                "Gateway service start requested. Waiting for server response."
-            )
-        } catch (e: Exception) {
-            gatewayStartRequested = false
-
-            updateStatus(
-                "Could not start service: ${e.localizedMessage}"
-            )
-        }
-    }
-
-    private fun stopGatewayService() {
-        val stopped = stopService(
-            Intent(this, GatewayService::class.java)
-        )
-
-        gatewayStartRequested = false
-
-        updateStatus(
-            if (stopped) {
-                "Gateway service stop requested."
-            } else {
-                "Stop requested. Service may already be stopped."
-            }
-        )
-    }
-
-    private fun openGatewaySettings() {
-        try {
-            startActivity(
-                Intent(
-                    this,
-                    GatewaySettingsActivity::class.java
-                )
-            )
-        } catch (e: Exception) {
-            showToast(
-                "Could not open Gateway Settings. Check AndroidManifest.xml. " +
-                    (e.localizedMessage ?: "")
-            )
-        }
-    }
+    private data class PendingGatewayResult(
+        val jobId: Long,
+        val requestId: String,
+        val success: Boolean,
+        val errorCode: String?
+    )
+
+    private val pendingResultLock = Any()
 
     /**
-     * SERVER status is based on the latest result recorded by GatewayService.
+     * Poll watchdog.
      *
-     * A saved device token alone does not mean the server is currently reachable.
-     * GatewayService must write these preferences after its actual polling result:
-     *
-     * ss_mediaos_gateway_status:
-     *   service_running  : Boolean
-     *   server_state     : CONNECTED / FAILED / CONNECTING
-     *   server_check_at  : Long (System.currentTimeMillis())
+     * Keep scheduling independently of the HTTP callback. Earlier versions
+     * scheduled the next poll only from inside the callback. If a callback
+     * threw before reaching its scheduling line, polling could stop while
+     * the foreground service still appeared active.
      */
-    private fun updateStatus(message: String? = null) {
-        val smsGranted =
-            checkSelfPermission(Manifest.permission.SEND_SMS) ==
-                PackageManager.PERMISSION_GRANTED
+    private val pollRunnable = object : Runnable {
+        override fun run() {
+            if (!serviceRunning) return
 
-        val serverUrl = SecureConfig.getServerUrl(this)
-        val deviceCode = SecureConfig.getDeviceCode(this)
-        val activationToken = SecureConfig.getActivationToken(this)
-        val deviceToken = SecureConfig.getDeviceToken(this)
+            try {
+                val pollStarted = pollStartedAtMs
+                if (
+                    requestInProgress &&
+                    pollStarted > 0L &&
+                    System.currentTimeMillis() - pollStarted > POLL_REQUEST_STALE_MS
+                ) {
+                    // The HTTP poll should finish within ApiClient's 30-second
+                    // read timeout. Recover only a stale poll lock; do not
+                    // interfere with an SMS currently being sent or reported.
+                    Log.e(TAG, "Stale Main Server poll lock detected; restarting poll loop")
+                    pollStartedAtMs = 0L
+                    requestInProgress = false
+                    setServerState(STATE_FAILED)
+                    updateStatus("Poll timed out — reconnecting to Main Server")
+                }
 
-        val serverPrefs = getSharedPreferences(
-            SERVER_STATUS_PREFS,
-            MODE_PRIVATE
-        )
+                if (!requestInProgress) {
+                    pollServer()
+                }
+            } catch (exception: Exception) {
+                Log.e(TAG, "Unexpected error in SMS poll loop", exception)
+                requestInProgress = false
+                setServerState(STATE_FAILED)
+                updateStatus(
+                    "Poll loop error: " +
+                        (exception.message ?: exception.javaClass.simpleName)
+                            .replace(Regex("[\\r\\n\\t]+"), " ")
+                            .take(180)
+                )
+            } finally {
+                if (serviceRunning) {
+                    handler.removeCallbacks(this)
+                    handler.postDelayed(this, POLL_WATCHDOG_INTERVAL_MS)
+                }
+            }
+        }
+    }
 
-        val serviceRunning = serverPrefs.getBoolean(
-            PREF_SERVICE_RUNNING,
-            false
-        )
+    private val smsResultReceiver = object : BroadcastReceiver() {
 
-        val serverState = serverPrefs.getString(
-            PREF_SERVER_STATE,
-            SERVER_STATE_CONNECTING
-        ) ?: SERVER_STATE_CONNECTING
+        override fun onReceive(context: Context, intent: Intent) {
 
-        val lastCheckAt = serverPrefs.getLong(
-            PREF_SERVER_CHECK_AT,
-            0L
-        )
-        val lastGatewayDetail = serverPrefs.getString(
-            PREF_LAST_STATUS_MESSAGE,
-            ""
-        ).orEmpty().trim()
-        val lastGatewayDetailAt = serverPrefs.getLong(
-            PREF_LAST_STATUS_AT,
-            0L
-        )
-
-        val now = System.currentTimeMillis()
-
-        val hasServerConfiguration =
-            !serverUrl.isNullOrBlank() &&
-                !deviceCode.isNullOrBlank() &&
-                !activationToken.isNullOrBlank()
-
-        val hasDeviceActivation = !deviceToken.isNullOrBlank()
-
-        // Do not treat a saved token as proof of a live connection.
-        val checkIsFresh =
-            lastCheckAt > 0L &&
-                now >= lastCheckAt &&
-                now - lastCheckAt <= STATUS_FRESHNESS_MS
-
-        val serverStatus = when {
-            !hasServerConfiguration -> {
-                "NOT ACTIVATED"
+            if (
+                intent.action !=
+                SmsSentReceiver.ACTION_SMS_PART_RESULT
+            ) {
+                return
             }
 
-            !hasDeviceActivation -> {
-                "NOT ACTIVATED"
+            val jobId = intent.getLongExtra(
+                SmsSentReceiver.EXTRA_JOB_ID,
+                -1L
+            )
+
+            val requestId = intent.getStringExtra(
+                SmsSentReceiver.EXTRA_GATEWAY_REQUEST_ID
+            ).orEmpty()
+
+            val partIndex = intent.getIntExtra(
+                SmsSentReceiver.EXTRA_PART_INDEX,
+                -1
+            )
+
+            val totalParts = intent.getIntExtra(
+                SmsSentReceiver.EXTRA_TOTAL_PARTS,
+                1
+            )
+
+            val success = intent.getBooleanExtra(
+                SmsSentReceiver.EXTRA_SUCCESS,
+                false
+            )
+
+            val callbackResult = intent.getStringExtra(
+                SmsSentReceiver.EXTRA_RESULT
+            ).orEmpty()
+
+            val state = smsJobs[jobId]
+
+            if (state == null) {
+                Log.w(TAG, "Ignoring callback for unknown job: $jobId")
+                return
             }
 
-            serviceRunning &&
-                checkIsFresh &&
-                serverState.equals(
-                    SERVER_STATE_CONNECTED,
-                    ignoreCase = true
-                ) -> {
-                "ACTIVATED"
+            var finalSuccess: Boolean? = null
+            var finalError: String? = null
+
+            synchronized(state) {
+
+                if (state.completed) {
+                    Log.w(TAG, "Ignoring callback for completed job $jobId")
+                    return
+                }
+
+                if (state.requestId != requestId) {
+                    Log.w(TAG, "Request ID mismatch for job $jobId")
+                    return
+                }
+
+                if (totalParts < 1 || partIndex !in 0 until totalParts) {
+                    Log.w(TAG, "Invalid multipart callback for job $jobId")
+                    return
+                }
+
+                if (
+                    state.totalParts != 0 &&
+                    state.totalParts != totalParts
+                ) {
+                    Log.w(TAG, "Multipart count mismatch for job $jobId")
+                    return
+                }
+
+                state.totalParts = totalParts
+
+                if (state.results.containsKey(partIndex)) {
+                    Log.w(
+                        TAG,
+                        "Duplicate callback ignored: job=$jobId part=$partIndex"
+                    )
+                    return
+                }
+
+                state.results[partIndex] = success
+
+                if (!success && state.errorCode == null) {
+                    state.errorCode = callbackResult
+                        .replace(Regex("[^A-Za-z0-9_.-]"), "_")
+                        .take(100)
+                        .ifBlank { "SMS_SEND_FAILED" }
+                }
+
+                Log.i(
+                    TAG,
+                    "SMS part result: job=$jobId, " +
+                        "part=${partIndex + 1}/$totalParts, " +
+                        "success=$success"
+                )
+
+                if (state.results.size == state.totalParts) {
+
+                    state.completed = true
+
+                    finalSuccess =
+                        state.results.values.all { it }
+
+                    finalError = if (finalSuccess == true) {
+                        null
+                    } else {
+                        state.errorCode ?: "SMS_SEND_FAILED"
+                    }
+
+                    smsJobs.remove(jobId, state)
+                }
             }
 
-            serviceRunning &&
-                checkIsFresh &&
-                serverState.equals(
-                    SERVER_STATE_FAILED,
-                    ignoreCase = true
-                ) -> {
-                "CONNECTION FAILED"
+            if (finalSuccess != null) {
+                reportResult(
+                    jobId = jobId,
+                    requestId = requestId,
+                    success = finalSuccess == true,
+                    errorCode = finalError
+                )
+            }
+        }
+    }
+
+    override fun onCreate() {
+        super.onCreate()
+
+        createNotificationChannel()
+        registerSmsResultReceiver()
+
+        Log.i(TAG, "Gateway service created")
+    }
+
+    override fun onStartCommand(
+        intent: Intent?,
+        flags: Int,
+        startId: Int
+    ): Int {
+
+        when (intent?.action) {
+
+            ACTION_STOP -> {
+                Log.i(TAG, "Gateway stop requested")
+                stopGateway()
+                return START_NOT_STICKY
             }
 
-            serviceRunning -> {
-                "CONNECTING"
-            }
-
-            checkIsFresh &&
-                serverState.equals(
-                    SERVER_STATE_FAILED,
-                    ignoreCase = true
-                ) -> {
-                "CONNECTION FAILED"
+            ACTION_START, null -> {
+                currentStartId = startId
+                startGateway(startId)
             }
 
             else -> {
-                "CONNECTING"
+                Log.w(TAG, "Unknown service action")
+                stopSelf(startId)
+                return START_NOT_STICKY
             }
         }
 
-        serverText.text =
-            "Server: ${serverUrl ?: "Not configured"}"
-
-        val phoneStateGranted = checkSelfPermission(Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED
-        permissionText.text = if (smsGranted && phoneStateGranted) {
-            "SMS & SIM Permission: Granted"
+        return if (serviceRunning) {
+            START_STICKY
         } else {
-            "Required permission missing"
+            START_NOT_STICKY
         }
+    }
 
-        statusText.text = buildString {
-            appendLine("App Status: Running")
+    private fun registerSmsResultReceiver() {
+        if (receiverRegistered) return
 
-            appendLine(
-                if (smsGranted && phoneStateGranted) {
-                    "SMS sending and SIM inspection permissions are granted."
-                } else {
-                    "Grant SEND_SMS and READ_PHONE_STATE permissions before starting the gateway."
-                }
-            )
+        val filter = IntentFilter(
+            SmsSentReceiver.ACTION_SMS_PART_RESULT
+        )
 
-            appendLine("Server Status: $serverStatus")
-
-            if (lastCheckAt > 0L) {
-                appendLine(
-                    "Last server check: " +
-                        android.text.format.DateFormat.format(
-                            "dd MMM yyyy, hh:mm:ss a",
-                            lastCheckAt
-                        )
+        try {
+            if (Build.VERSION.SDK_INT >= 33) {
+                registerReceiver(
+                    smsResultReceiver,
+                    filter,
+                    Context.RECEIVER_NOT_EXPORTED
                 )
             } else {
-                appendLine("Last server check: Not available yet")
+                @Suppress("DEPRECATION")
+                registerReceiver(smsResultReceiver, filter)
             }
 
-            if (lastGatewayDetail.isNotBlank()) {
-                appendLine("Gateway detail: $lastGatewayDetail")
-                if (lastGatewayDetailAt > 0L) {
-                    appendLine(
-                        "Detail updated: " +
-                            android.text.format.DateFormat.format(
-                                "dd MMM yyyy, hh:mm:ss a",
-                                lastGatewayDetailAt
-                            )
+            receiverRegistered = true
+
+        } catch (e: Exception) {
+            Log.e(TAG, "Unable to register SMS result receiver", e)
+        }
+    }
+
+    private fun startGateway(startId: Int) {
+
+        if (serviceRunning) {
+            Log.i(TAG, "Gateway is already running")
+            return
+        }
+
+        val serverUrl: String = SecureConfig.getServerUrl(this).orEmpty().trim()
+        val deviceCode: String = SecureConfig.getDeviceCode(this).orEmpty().trim()
+        val companyApiKey: String = SecureConfig.getCompanyApiKey(this).orEmpty().trim()
+        val deviceToken: String = SecureConfig.getDeviceToken(this).orEmpty().trim()
+
+        if (
+            serverUrl.isBlank() ||
+            deviceCode.isBlank() ||
+            companyApiKey.isBlank()
+        ) {
+            Log.w(TAG, "Gateway start blocked: required settings missing")
+
+            saveServiceRunning(false)
+            setServerState(STATE_FAILED)
+            updateStatus("Gateway not started: save the Main Server URL, Device Code and Company API Key first")
+
+            stopSelf(startId)
+            return
+        }
+
+        if (!SecureConfig.isOrganizationVerified(this)) {
+            Log.w(TAG, "Gateway start blocked: institution/mobile is not verified")
+
+            saveServiceRunning(false)
+            setServerState(STATE_FAILED)
+            updateStatus("Gateway not started: verify the institution and registered mobile first")
+            stopSelf(startId)
+            return
+        }
+
+        // A gateway must be bound to exactly one verified institution.
+        // Do not start polling if the authoritative institution identity is incomplete.
+        val verifiedInstitutionId = SecureConfig.getOrganizationId(this).trim()
+        val verifiedInstitutionName = SecureConfig.getOrganizationName(this).trim()
+        val verifiedInstitutionCode = SecureConfig.getOrganizationCode(this).trim()
+        if (verifiedInstitutionId.isBlank() || verifiedInstitutionName.isBlank() || verifiedInstitutionCode.isBlank()) {
+            Log.w(TAG, "Gateway start blocked: verified institution identity is incomplete")
+            saveServiceRunning(false)
+            setServerState(STATE_FAILED)
+            updateStatus("Institution ID, name and code must be verified first")
+            stopSelf(startId)
+            return
+        }
+
+        if (SecureConfig.getSelectedSimSubscriptionId(this) == null) {
+            Log.w(TAG, "Gateway start blocked: no SIM has been selected")
+
+            saveServiceRunning(false)
+            setServerState(STATE_FAILED)
+            updateStatus("Select an assigned SIM before starting the gateway")
+            stopSelf(startId)
+            return
+        }
+
+        if (deviceToken.isBlank()) {
+            Log.w(TAG, "Gateway start blocked: device is not activated")
+
+            saveServiceRunning(false)
+            setServerState(STATE_FAILED)
+            updateStatus("Gateway not started: activate this device with Main Server first")
+
+            stopSelf(startId)
+            return
+        }
+
+        if (
+            checkSelfPermission(Manifest.permission.SEND_SMS) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            Log.w(TAG, "Gateway start blocked: SEND_SMS permission missing")
+
+            saveServiceRunning(false)
+            setServerState(STATE_FAILED)
+            updateStatus("Gateway not started: allow SMS permission in Android App Settings")
+
+            stopSelf(startId)
+            return
+        }
+
+        if (!receiverRegistered) {
+            registerSmsResultReceiver()
+        }
+
+        if (!receiverRegistered) {
+            Log.e(TAG, "Gateway start blocked: callback receiver unavailable")
+
+            saveServiceRunning(false)
+            setServerState(STATE_FAILED)
+
+            stopSelf(startId)
+            return
+        }
+
+        try {
+            val notification = createNotification("Gateway is starting")
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(
+                    NOTIFICATION_ID,
+                    notification,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+                )
+            } else {
+                startForeground(NOTIFICATION_ID, notification)
+            }
+
+            serviceRunning = true
+            requestInProgress = false
+            resultReporting = false
+            acquireGatewayWakeLock()
+
+            saveServiceRunning(true)
+            setServerState(STATE_CONNECTING)
+
+            updateStatus("Activated — connecting to server")
+
+            Log.i(TAG, "Gateway service started")
+
+            handler.removeCallbacks(pollRunnable)
+            handler.post(pollRunnable)
+
+        } catch (exception: Exception) {
+            Log.e(TAG, "Unable to start gateway service", exception)
+
+            serviceRunning = false
+            requestInProgress = false
+            releaseGatewayWakeLock()
+
+            saveServiceRunning(false)
+            setServerState(STATE_FAILED)
+
+            try {
+                stopForeground(STOP_FOREGROUND_REMOVE)
+            } catch (stopException: Exception) {
+                Log.w(
+                    TAG,
+                    "Could not remove foreground notification",
+                    stopException
+                )
+            }
+
+            stopSelf(startId)
+        }
+    }
+
+    /**
+     * Fetch one queued job from device_poll.php.
+     *
+     * A successful authenticated polling response marks the server
+     * as connected. Failed requests mark it as failed.
+     */
+    private fun pollServer() {
+        if (!serviceRunning || requestInProgress) return
+
+        // Report a previously claimed job before claiming another one.
+        if (loadPendingResult() != null) {
+            sendPendingResult()
+            return
+        }
+
+        requestInProgress = true
+        pollStartedAtMs = System.currentTimeMillis()
+        setServerState(STATE_CONNECTING)
+
+        ApiClient.pollGatewayJob { result ->
+
+            pollStartedAtMs = 0L
+
+            if (!serviceRunning) {
+                requestInProgress = false
+                return@pollGatewayJob
+            }
+
+            result.fold(
+                onSuccess = { response ->
+
+                    val job = response.optJSONObject("job")
+
+                    if (!response.optBoolean("ok", false)) {
+                        requestInProgress = false
+
+                        setServerState(STATE_FAILED)
+                        updateStatus("Invalid server response")
+                        scheduleRetryPoll()
+
+                        return@fold
+                    }
+
+                    // Server has accepted the authenticated poll request.
+                    setServerState(STATE_CONNECTED)
+
+                    val diagnosticCode = response.optString("diagnostic_code", "POLL_OK")
+                        .ifBlank { "POLL_OK" }
+                    val diagnosticMessage = response.optString("diagnostic_message", "")
+                        .replace(Regex("[\r\n\t]+"), " ")
+                        .take(220)
+                    val nextAction = response.optString("next_action", "")
+                        .replace(Regex("[\r\n\t]+"), " ")
+                        .take(180)
+
+                    Log.i(
+                        TAG,
+                        "Main Server poll accepted: http=${response.optInt("_httpStatus", 200)}, " +
+                            "poll_request_id=${response.optString("poll_request_id", "")}, " +
+                            "code=$diagnosticCode, " +
+                            "device=${response.optJSONObject("device")?.optString("code", "unknown")}, " +
+                            "message=$diagnosticMessage, next=$nextAction"
                     )
-                }
-            }
 
-            if (message != null) {
-                appendLine()
-                append(message)
-            }
+                    if (job == null) {
+                        requestInProgress = false
+                        if (response.optBoolean("busy", false)) {
+                            updateStatus("Connected — previous SMS result is pending")
+                            // Avoid rapid empty responses while Main Server is
+                            // holding a job in `sending` state.
+                            scheduleRetryPoll()
+                        } else {
+                            val visibleDiagnostic = when (diagnosticCode) {
+                                "SMS_ASSIGNED_TO_DIFFERENT_DEVICE" -> "SMS queue is assigned to another device"
+                                "QUEUED_JOB_NOT_CLAIMED" -> "SMS is queued but Main Server could not claim it"
+                                "NO_QUEUED_SMS_FOR_DEVICE" -> "Connected — no SMS assigned to this device"
+                                else -> diagnosticMessage.ifBlank { "Connected — waiting for SMS jobs" }
+                            }
+                            updateStatus(visibleDiagnostic)
+                            // Keep one long-poll request active continuously. The Main
+                            // Server returns immediately when a new queue row appears.
+                            scheduleImmediatePoll()
+                        }
+                        return@fold
+                    }
+
+                    updateStatus("SMS job received from Main Server — preparing selected SIM")
+                    processJob(job)
+                },
+
+                onFailure = { exception ->
+                    requestInProgress = false
+
+                    val detail = exception.message
+                        ?.replace(Regex("[\r\n\t]+"), " ")
+                        ?.take(220)
+                        ?.ifBlank { exception.javaClass.simpleName }
+                        ?: exception.javaClass.simpleName
+
+                    Log.e(TAG, "Gateway polling failed: $detail", exception)
+
+                    setServerState(STATE_FAILED)
+                    updateStatus("Main Server poll failed: $detail — retrying")
+                    scheduleRetryPoll()
+                }
+            )
+        }
+    }
+
+    /**
+     * Keep this rule identical to message_enqueue.php:
+     * ignore only underscore, hyphen and whitespace; compare case-insensitively.
+     */
+    private fun normalizeInstitutionCode(value: String): String {
+        return value.trim()
+            .replace(Regex("[_\\-\\s]+"), "")
+            .uppercase(java.util.Locale.ROOT)
+    }
+
+    /**
+     * Validate a claimed server job and submit it to Android.
+     */
+    private fun processJob(job: JSONObject) {
+        // Validate the server claim first so every identifiable claimed job can
+        // receive a terminal result instead of being silently abandoned.
+        val jobId = job.optLong("id", 0L)
+        val requestId = job.optString("request_id", "").orEmpty().trim()
+        val phoneNumber = job.optString("to", "").orEmpty().trim()
+        val message = job.optString("message", "").orEmpty()
+
+        if (
+            jobId <= 0L ||
+            !requestId.matches(Regex("^[a-f0-9]{32}$")) ||
+            phoneNumber.isBlank() ||
+            message.isBlank()
+        ) {
+            Log.e(TAG, "Received invalid SMS job")
+            rejectClaimedJob(jobId, requestId, "INVALID_JOB", "Invalid SMS job received")
+            return
         }
 
-        // Dashboard SERVER card
-        val serverValue = content.findViewWithTag<TextView>(
-            "value_SERVER"
-        )
+        // Re-check authorization immediately before every send. If a claimed
+        // job cannot be sent, report a failure to Main Server so it is not left
+        // indefinitely in a claimed/processing state.
+        if (!SecureConfig.isOrganizationVerified(this)) {
+            Log.w(TAG, "SMS job blocked: organization/mobile is not verified")
+            rejectClaimedJob(
+                jobId, requestId, "ORGANIZATION_NOT_VERIFIED",
+                "SMS blocked: verify organization and registered mobile"
+            )
+            return
+        }
 
-        serverValue?.text = serverStatus
+        val selectedSubscriptionId = SecureConfig.getSelectedSimSubscriptionId(this)
+        if (selectedSubscriptionId == null) {
+            Log.w(TAG, "SMS job blocked: no SIM is selected")
+            rejectClaimedJob(
+                jobId, requestId, "SIM_NOT_SELECTED",
+                "SMS blocked: select an assigned SIM"
+            )
+            return
+        }
 
-        // Dashboard permission card
-        val permissionValue = content.findViewWithTag<TextView>(
-            "value_SMS_PERMISSION"
-        )
+        // Institution isolation: both the immutable database ID and exact
+        // institution code must match the one verified on this gateway.
+        val verifiedInstitutionId = SecureConfig.getOrganizationId(this).trim()
+        val verifiedInstitutionCode = SecureConfig.getOrganizationCode(this).trim()
 
-        permissionValue?.text = if (smsGranted && phoneStateGranted) {
-            "GRANTED"
+        val jobInstitutionId = sequenceOf(
+            job.optString("institution_id", ""),
+            job.optString("institutionId", ""),
+            job.optString("organization_id", ""),
+            job.optString("organizationId", "")
+        ).map { it.trim() }.firstOrNull { it.isNotBlank() }.orEmpty()
+
+        val jobInstitutionCode = sequenceOf(
+            job.optString("institution_code", ""),
+            job.optString("institutionCode", ""),
+            job.optString("organization_code", ""),
+            job.optString("organizationCode", "")
+        ).map { it.trim() }.firstOrNull { it.isNotBlank() }.orEmpty()
+
+        // device_poll.php authenticates the gateway token and selects queue rows
+        // scoped to that device's company_id + institution_id. Some deployed
+        // versions return only id/request_id/recipient/message in the job JSON,
+        // so institution fields may legitimately be absent. Require the locally
+        // verified identity, and compare server-returned identity whenever it is
+        // present; do not reject a tenant-scoped job merely because older poll
+        // responses omit duplicate institution metadata.
+        val institutionIdMismatch =
+            jobInstitutionId.isNotBlank() &&
+                jobInstitutionId != verifiedInstitutionId
+        val institutionCodeMismatch =
+            jobInstitutionCode.isNotBlank() &&
+                normalizeInstitutionCode(jobInstitutionCode) !=
+                normalizeInstitutionCode(verifiedInstitutionCode)
+
+        if (
+            verifiedInstitutionId.isBlank() ||
+            verifiedInstitutionCode.isBlank() ||
+            institutionIdMismatch ||
+            institutionCodeMismatch
+        ) {
+            Log.e(TAG, "SMS job blocked: verified institution identity is missing or server identity mismatched")
+            rejectClaimedJob(
+                jobId, requestId, "INSTITUTION_MISMATCH",
+                "SMS blocked: job does not belong to this verified institution"
+            )
+            return
+        }
+
+        updateStatus("Processing SMS job")
+        Log.i(TAG, "Processing SMS job ID: $jobId")
+
+        // Register the job BEFORE asking Android to send the SMS.
+        // A sent PendingIntent callback can arrive very quickly; registering
+        // after sendSms() creates a race where that callback is lost.
+        val jobState = SmsJobState(requestId = requestId)
+        val existingState = smsJobs.putIfAbsent(jobId, jobState)
+        if (existingState != null) {
+            Log.e(TAG, "Duplicate in-flight SMS job ignored: $jobId")
+            requestInProgress = false
+            updateStatus("Duplicate SMS job ignored — check server")
+            scheduleImmediatePoll()
+            return
+        }
+
+        when (
+            val sendResult = SmsHelper.sendSms(
+                context = this,
+                phoneNumber = phoneNumber,
+                message = message,
+                jobId = jobId,
+                requestId = requestId
+            )
+        ) {
+            is SmsHelper.SendResult.Success -> {
+                updateStatus("SMS submitted — awaiting Android callback")
+            }
+
+            is SmsHelper.SendResult.Failure -> {
+                // No Android callback is expected after submission failure.
+                smsJobs.remove(jobId, jobState)
+                Log.e(
+                    TAG,
+                    "SMS submission failed: ${sendResult.reason}"
+                )
+
+                reportResult(
+                    jobId = jobId,
+                    requestId = requestId,
+                    success = false,
+                    errorCode = "SMS_SUBMISSION_FAILED"
+                )
+            }
+        }
+    }
+
+    /** Report a claimed job that was rejected before Android SMS submission. */
+    private fun rejectClaimedJob(
+        jobId: Long,
+        requestId: String,
+        errorCode: String,
+        userMessage: String
+    ) {
+        requestInProgress = false
+        updateStatus(userMessage)
+
+        if (jobId > 0L && requestId.matches(Regex("^[a-f0-9]{32}$"))) {
+            reportResult(
+                jobId = jobId,
+                requestId = requestId,
+                success = false,
+                errorCode = errorCode
+            )
         } else {
-            "NOT GRANTED"
-        }
-
-        gatewayText.text = buildString {
-            appendLine(
-                if (serviceRunning || gatewayStartRequested) {
-                    "Gateway service is running or starting."
-                } else {
-                    "Gateway service is stopped."
-                }
-            )
-
-            appendLine(
-                if (smsGranted && phoneStateGranted) {
-                    "SMS and SIM permissions are available."
-                } else {
-                    "Grant SEND_SMS and READ_PHONE_STATE before starting the gateway."
-                }
-            )
-
-            appendLine(
-                if (serverUrl.isNullOrBlank()) {
-                    "Server URL is not configured."
-                } else {
-                    "Server URL is configured."
-                }
-            )
-
-            appendLine(
-                when {
-                    deviceCode.isNullOrBlank() ||
-                        activationToken.isNullOrBlank() -> {
-                        "Device Code and Activation Token are not configured."
-                    }
-
-                    deviceToken.isNullOrBlank() -> {
-                        "Device is not activated. Activate it in Gateway Settings."
-                    }
-
-                    else -> {
-                        "Device activation token is saved."
-                    }
-                }
-            )
-
-            append("Server connection: $serverStatus")
+            Log.e(TAG, "Cannot report rejected job: invalid job ID or request ID")
         }
     }
 
-    private fun showToast(message: String) {
-        Toast.makeText(
-            this,
-            message,
-            Toast.LENGTH_LONG
-        ).show()
+    /**
+     * Report the final result to device_result.php.
+     */
+    private fun reportResult(
+        jobId: Long,
+        requestId: String,
+        success: Boolean,
+        errorCode: String? = null
+    ) {
+        if (jobId <= 0L || requestId.isBlank()) {
+            Log.e(TAG, "Cannot save invalid SMS result")
+            requestInProgress = false
+            return
+        }
+
+        val pending = PendingGatewayResult(
+            jobId = jobId,
+            requestId = requestId,
+            success = success,
+            errorCode = errorCode
+        )
+
+        // Persist a timestamped local activity record for the Dashboard and SMS Logs.
+        // This records the Android device submission result, not a carrier delivery receipt.
+        recordSmsActivity(jobId, requestId, success, errorCode)
+
+        synchronized(pendingResultLock) {
+            val existing = loadPendingResult()
+
+            if (existing != null &&
+                (existing.jobId != jobId || existing.requestId != requestId)
+            ) {
+                Log.e(
+                    TAG,
+                    "A different SMS result is still pending; refusing to overwrite it"
+                )
+                requestInProgress = false
+                return
+            }
+
+            savePendingResult(pending)
+        }
+
+        if (serviceRunning) {
+            sendPendingResult()
+        } else {
+            Log.w(TAG, "SMS result saved locally; service is not running")
+            requestInProgress = false
+        }
     }
 
-    private fun dp(value: Int): Int =
-        (value * resources.displayMetrics.density).toInt()
+    /**
+     * Submit the locally persisted result. Keep it until the server confirms it.
+     */
+    private fun sendPendingResult() {
+        if (!serviceRunning || resultReporting) return
+
+        val pending = loadPendingResult() ?: return
+
+        resultReporting = true
+        requestInProgress = true
+
+        ApiClient.submitGatewayResult(
+            jobId = pending.jobId,
+            requestId = pending.requestId,
+            success = pending.success,
+            errorCode = pending.errorCode
+        ) { result ->
+
+            resultReporting = false
+
+            if (!serviceRunning) {
+                requestInProgress = false
+                return@submitGatewayResult
+            }
+
+            result.fold(
+                onSuccess = { response ->
+                    if (!response.optBoolean("ok", false)) {
+                        Log.e(
+                            TAG,
+                            "Server rejected result for job ${pending.jobId}; keeping it for retry"
+                        )
+                        requestInProgress = false
+                        updateStatus("Result report rejected — retrying")
+                        scheduleRetryPoll()
+                        return@fold
+                    }
+
+                    synchronized(pendingResultLock) {
+                        val current = loadPendingResult()
+                        if (
+                            current?.jobId == pending.jobId &&
+                            current.requestId == pending.requestId
+                        ) {
+                            clearPendingResult()
+                        }
+                    }
+
+                    Log.i(TAG, "Server accepted result for job ${pending.jobId}")
+                    requestInProgress = false
+                    scheduleImmediatePoll()
+
+                    updateStatus(
+                        if (pending.success) {
+                            "SMS result accepted — waiting for next job"
+                        } else {
+                            "SMS failure reported — waiting for next job"
+                        }
+                    )
+                },
+
+                onFailure = { exception ->
+                    Log.e(
+                        TAG,
+                        "Could not report result for job ${pending.jobId} " +
+                            "(${exception.javaClass.simpleName})"
+                    )
+                    // Keep the pending result. pollServer() retries it.
+                    requestInProgress = false
+                    updateStatus("Result report failed — retrying")
+                    scheduleRetryPoll()
+                }
+            )
+        }
+    }
+
+    /** Schedule the next queue check promptly after a completed job. */
+    private fun scheduleImmediatePoll() {
+        if (!serviceRunning) return
+        handler.removeCallbacks(pollRunnable)
+        handler.postDelayed(pollRunnable, IMMEDIATE_POLL_DELAY_MS)
+    }
+
+    /** Back off briefly on network/API failures; never spin a tight retry loop. */
+    private fun scheduleRetryPoll() {
+        if (!serviceRunning) return
+        handler.removeCallbacks(pollRunnable)
+        handler.postDelayed(pollRunnable, RETRY_POLL_DELAY_MS)
+    }
+
+    /**
+     * Save a bounded, de-duplicated local history for the app Dashboard.
+     * The history is device-local and does not read incoming SMS or message bodies.
+     */
+    private fun recordSmsActivity(
+        jobId: Long,
+        requestId: String,
+        success: Boolean,
+        errorCode: String?
+    ) {
+        val prefs = getSharedPreferences(SMS_STATS_PREFS, MODE_PRIVATE)
+        synchronized(SMS_HISTORY_LOCK) {
+            val history = try {
+                JSONArray(prefs.getString(SMS_HISTORY_KEY, "[]") ?: "[]")
+            } catch (_: Exception) {
+                JSONArray()
+            }
+
+            // A repeated callback must not inflate counters or duplicate the log.
+            for (index in 0 until history.length()) {
+                val existing = history.optJSONObject(index) ?: continue
+                if (existing.optString("request_id") == requestId) return
+            }
+
+            val record = JSONObject().apply {
+                put("job_id", jobId)
+                put("request_id", requestId)
+                put("status", if (success) "sent" else "failed")
+                put("error_code", errorCode ?: JSONObject.NULL)
+                put("timestamp", System.currentTimeMillis())
+            }
+            history.put(record)
+
+            // Keep the newest 500 records so SharedPreferences remains bounded.
+            val bounded = JSONArray()
+            val start = (history.length() - MAX_LOCAL_SMS_HISTORY).coerceAtLeast(0)
+            for (index in start until history.length()) {
+                bounded.put(history.getJSONObject(index))
+            }
+
+            val sentCount = prefs.getInt("sent_count", 0) + if (success) 1 else 0
+            val failedCount = prefs.getInt("failed_count", 0) + if (success) 0 else 1
+            prefs.edit()
+                .putString(SMS_HISTORY_KEY, bounded.toString())
+                .putInt("sent_count", sentCount)
+                .putInt("failed_count", failedCount)
+                .apply()
+        }
+    }
+
+    private fun savePendingResult(result: PendingGatewayResult) {
+        val json = JSONObject().apply {
+            put("job_id", result.jobId)
+            put("request_id", result.requestId)
+            put("success", result.success)
+            put("error_code", result.errorCode ?: JSONObject.NULL)
+        }
+
+        getSharedPreferences(statusPrefsName, MODE_PRIVATE)
+            .edit()
+            .putString(PREF_PENDING_RESULT, json.toString())
+            .apply()
+    }
+
+    private fun loadPendingResult(): PendingGatewayResult? {
+        val raw = getSharedPreferences(statusPrefsName, MODE_PRIVATE)
+            .getString(PREF_PENDING_RESULT, null)
+            ?: return null
+
+        return try {
+            val json = JSONObject(raw)
+            val jobId = json.optLong("job_id", 0L)
+            val requestId = json.optString("request_id", "").trim()
+
+            if (jobId <= 0L || requestId.isBlank()) {
+                Log.e(TAG, "Stored pending SMS result is invalid")
+                null
+            } else {
+                val errorCode = if (json.isNull("error_code")) {
+                    null
+                } else {
+                    json.optString("error_code")
+                }
+
+                PendingGatewayResult(
+                    jobId = jobId,
+                    requestId = requestId,
+                    success = json.optBoolean("success", false),
+                    errorCode = errorCode
+                )
+            }
+        } catch (exception: Exception) {
+            Log.e(TAG, "Could not read pending SMS result", exception)
+            null
+        }
+    }
+
+    private fun clearPendingResult() {
+        getSharedPreferences(statusPrefsName, MODE_PRIVATE)
+            .edit()
+            .remove(PREF_PENDING_RESULT)
+            .apply()
+    }
+
+    /**
+     * Save whether the Android foreground gateway service is running.
+     */
+    private fun saveServiceRunning(running: Boolean) {
+        getSharedPreferences(
+            statusPrefsName,
+            MODE_PRIVATE
+        ).edit()
+            .putBoolean(PREF_SERVICE_RUNNING, running)
+            .apply()
+    }
+
+    /**
+     * Save server state and the time of the latest state change.
+     *
+     * MainActivity uses this timestamp to avoid showing an old
+     * connection result as a current connection.
+     */
+    private fun setServerState(state: String) {
+        getSharedPreferences(
+            statusPrefsName,
+            MODE_PRIVATE
+        ).edit()
+            .putString(PREF_SERVER_STATE, state)
+            .putLong(PREF_SERVER_CHECK_AT, System.currentTimeMillis())
+            .apply()
+    }
+
+    private fun updateStatus(message: String) {
+        // Persist the latest human-readable gateway detail so MainActivity can
+        // show the real reason (token rejected, network timeout, mapping issue,
+        // missing permissions, etc.) instead of only a generic FAILED label.
+        getSharedPreferences(statusPrefsName, MODE_PRIVATE)
+            .edit()
+            .putString(PREF_LAST_STATUS_MESSAGE, message.take(240))
+            .putLong(PREF_LAST_STATUS_AT, System.currentTimeMillis())
+            .apply()
+
+        if (!serviceRunning) return
+
+        try {
+            updateNotification(message)
+        } catch (exception: Exception) {
+            Log.w(
+                TAG,
+                "Unable to update gateway notification",
+                exception
+            )
+        }
+    }
+
+    private fun stopGateway() {
+
+        serviceRunning = false
+        requestInProgress = false
+        resultReporting = false
+
+        handler.removeCallbacks(pollRunnable)
+        releaseGatewayWakeLock()
+
+        saveServiceRunning(false)
+        setServerState(STATE_STOPPED)
+        smsJobs.clear()
+
+        try {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+        } catch (exception: Exception) {
+            Log.w(TAG, "Error while stopping foreground service", exception)
+        }
+
+        stopSelf()
+        Log.i(TAG, "Gateway service stopped")
+    }
+
+    /**
+     * A foreground service alone does not guarantee the CPU stays awake while
+     * the screen is off. Hold a partial wake lock only while the user-enabled
+     * gateway is active so its long-poll loop can continue in screen-off use.
+     */
+    private fun acquireGatewayWakeLock() {
+        try {
+            val existing = gatewayWakeLock
+            if (existing?.isHeld == true) return
+
+            val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+            gatewayWakeLock = powerManager.newWakeLock(
+                PowerManager.PARTIAL_WAKE_LOCK,
+                "$packageName:SmsGatewayPolling"
+            ).apply {
+                setReferenceCounted(false)
+                acquire()
+            }
+            Log.i(TAG, "Gateway partial wake lock acquired")
+        } catch (exception: Exception) {
+            Log.e(TAG, "Could not acquire gateway wake lock", exception)
+            updateStatus("Gateway is running, but Android could pause polling while the screen is off")
+        }
+    }
+
+    private fun releaseGatewayWakeLock() {
+        try {
+            gatewayWakeLock?.let { lock ->
+                if (lock.isHeld) lock.release()
+            }
+        } catch (exception: Exception) {
+            Log.w(TAG, "Could not release gateway wake lock", exception)
+        } finally {
+            gatewayWakeLock = null
+        }
+    }
+
+    private fun createNotificationChannel() {
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+
+            val channel = NotificationChannel(
+                CHANNEL_ID,
+                "SMS Gateway Service",
+                NotificationManager.IMPORTANCE_LOW
+            ).apply {
+                description =
+                    "Shows the status of the SS MediaOS SMS Gateway"
+                setShowBadge(false)
+            }
+
+            val manager =
+                getSystemService(NotificationManager::class.java)
+
+            manager.createNotificationChannel(channel)
+        }
+    }
+
+    private fun createNotification(message: String): Notification {
+
+        val builder =
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                Notification.Builder(this, CHANNEL_ID)
+            } else {
+                @Suppress("DEPRECATION")
+                Notification.Builder(this)
+            }
+
+        return builder
+            .setContentTitle("SS MediaOS SMS Gateway")
+            .setContentText(message)
+            .setSmallIcon(android.R.drawable.stat_notify_sync)
+            .setOngoing(true)
+            .setCategory(Notification.CATEGORY_SERVICE)
+            .build()
+    }
+
+    private fun updateNotification(message: String) {
+
+        val manager =
+            getSystemService(NotificationManager::class.java)
+
+        manager.notify(
+            NOTIFICATION_ID,
+            createNotification(message)
+        )
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        Log.i(TAG, "App task removed")
+        super.onTaskRemoved(rootIntent)
+    }
+
+    override fun onDestroy() {
+
+        serviceRunning = false
+        requestInProgress = false
+        resultReporting = false
+
+        handler.removeCallbacks(pollRunnable)
+        releaseGatewayWakeLock()
+
+        saveServiceRunning(false)
+        setServerState(STATE_STOPPED)
+        smsJobs.clear()
+
+        if (receiverRegistered) {
+            try {
+                unregisterReceiver(smsResultReceiver)
+            } catch (exception: IllegalArgumentException) {
+                Log.w(
+                    TAG,
+                    "SMS result receiver was not registered",
+                    exception
+                )
+            }
+
+            receiverRegistered = false
+        }
+
+        Log.i(TAG, "Gateway service destroyed")
+        super.onDestroy()
+    }
+
+    override fun onBind(intent: Intent?): IBinder? = null
 
     companion object {
-        private const val PERMISSION_REQUEST_CODE = 1001
 
-        // These names must match the values written by GatewayService.kt.
-        private const val SERVER_STATUS_PREFS =
-            "ss_mediaos_gateway_status"
+        private const val TAG = "GatewayService"
+        private const val CHANNEL_ID = "sms_gateway_service"
+        private const val NOTIFICATION_ID = 1001
 
-        private const val PREF_SERVICE_RUNNING =
-            "service_running"
+        private const val IMMEDIATE_POLL_DELAY_MS = 150L
+        private const val POLL_WATCHDOG_INTERVAL_MS = 5000L
+        private const val POLL_REQUEST_STALE_MS = 45000L
+        private const val RETRY_POLL_DELAY_MS = 3000L
 
-        private const val PREF_SERVER_STATE =
-            "server_state"
+        private const val PREF_SERVICE_RUNNING = "service_running"
+        private const val PREF_SERVER_STATE = "server_state"
+        private const val PREF_SERVER_CHECK_AT = "server_check_at"
+        private const val PREF_LAST_STATUS_MESSAGE = "last_status_message"
+        private const val PREF_LAST_STATUS_AT = "last_status_at"
+        private const val PREF_PENDING_RESULT = "pending_gateway_result"
 
-        private const val PREF_SERVER_CHECK_AT =
-            "server_check_at"
+        private const val SMS_STATS_PREFS = "ss_mediaos_sms_stats"
+        private const val SMS_HISTORY_KEY = "sms_history"
+        private const val MAX_LOCAL_SMS_HISTORY = 500
+        private val SMS_HISTORY_LOCK = Any()
 
-        private const val PREF_LAST_STATUS_MESSAGE =
-            "last_status_message"
+        private const val STATE_CONNECTED = "CONNECTED"
+        private const val STATE_FAILED = "FAILED"
+        private const val STATE_CONNECTING = "CONNECTING"
+        private const val STATE_STOPPED = "STOPPED"
 
-        private const val PREF_LAST_STATUS_AT =
-            "last_status_at"
+        const val ACTION_START =
+            "com.ssmediaos.smsgateway.action.START"
 
-        private const val SERVER_STATE_CONNECTED =
-            "CONNECTED"
-
-        private const val SERVER_STATE_FAILED =
-            "FAILED"
-
-        private const val SERVER_STATE_CONNECTING =
-            "CONNECTING"
-
-        // A server check older than 30 seconds is considered stale.
-        private const val STATUS_FRESHNESS_MS = 30_000L
+        const val ACTION_STOP =
+            "com.ssmediaos.smsgateway.action.STOP"
     }
 }
