@@ -266,12 +266,31 @@ class GatewayService : Service() {
         when (intent?.action) {
 
             ACTION_STOP -> {
-                Log.i(TAG, "Gateway stop requested")
+                // Only an explicit user Deactivate/Unlink action clears the
+                // persistent enabled flag. Android process/service recreation
+                // must never be interpreted as a manual deactivation.
+                Log.i(TAG, "Manual Gateway deactivation requested")
+                setGatewayEnabled(false)
                 stopGateway()
                 return START_NOT_STICKY
             }
 
-            ACTION_START, null -> {
+            ACTION_START -> {
+                // Persist the user's choice before starting the foreground
+                // service so a later OS process restart can restore it.
+                setGatewayEnabled(true)
+                currentStartId = startId
+                startGateway(startId)
+            }
+
+            null -> {
+                // START_STICKY may recreate the service with a null Intent.
+                // Resume only when the user had previously enabled the Gateway.
+                if (!isGatewayEnabled()) {
+                    Log.i(TAG, "Service recreated but Gateway is manually disabled")
+                    stopSelf(startId)
+                    return START_NOT_STICKY
+                }
                 currentStartId = startId
                 startGateway(startId)
             }
@@ -283,11 +302,7 @@ class GatewayService : Service() {
             }
         }
 
-        return if (serviceRunning) {
-            START_STICKY
-        } else {
-            START_NOT_STICKY
-        }
+        return if (serviceRunning) START_STICKY else START_NOT_STICKY
     }
 
     private fun registerSmsResultReceiver() {
@@ -357,12 +372,14 @@ class GatewayService : Service() {
         // Do not start polling if the authoritative institution identity is incomplete.
         val verifiedInstitutionId = SecureConfig.getOrganizationId(this).trim()
         val verifiedInstitutionName = SecureConfig.getOrganizationName(this).trim()
-        val verifiedInstitutionCode = SecureConfig.getOrganizationCode(this).trim()
-        if (verifiedInstitutionId.isBlank() || verifiedInstitutionName.isBlank() || verifiedInstitutionCode.isBlank()) {
+        // Institution Code is mutable metadata. It is not a durable device
+        // identity and must not be required to keep an already activated
+        // Gateway online. The Main Server token is authoritative for routing.
+        if (verifiedInstitutionId.isBlank() || verifiedInstitutionName.isBlank()) {
             Log.w(TAG, "Gateway start blocked: verified institution identity is incomplete")
             saveServiceRunning(false)
             setServerState(STATE_FAILED)
-            updateStatus("Institution ID, name and code must be verified first")
+            updateStatus("Verified institution identity is incomplete")
             stopSelf(startId)
             return
         }
@@ -631,53 +648,14 @@ class GatewayService : Service() {
             return
         }
 
-        // Institution isolation: both the immutable database ID and exact
-        // institution code must match the one verified on this gateway.
-        val verifiedInstitutionId = SecureConfig.getOrganizationId(this).trim()
-        val verifiedInstitutionCode = SecureConfig.getOrganizationCode(this).trim()
-
-        val jobInstitutionId = sequenceOf(
-            job.optString("institution_id", ""),
-            job.optString("institutionId", ""),
-            job.optString("organization_id", ""),
-            job.optString("organizationId", "")
-        ).map { it.trim() }.firstOrNull { it.isNotBlank() }.orEmpty()
-
-        val jobInstitutionCode = sequenceOf(
-            job.optString("institution_code", ""),
-            job.optString("institutionCode", ""),
-            job.optString("organization_code", ""),
-            job.optString("organizationCode", "")
-        ).map { it.trim() }.firstOrNull { it.isNotBlank() }.orEmpty()
-
-        // device_poll.php authenticates the gateway token and selects queue rows
-        // scoped to that device's company_id + institution_id. Some deployed
-        // versions return only id/request_id/recipient/message in the job JSON,
-        // so institution fields may legitimately be absent. Require the locally
-        // verified identity, and compare server-returned identity whenever it is
-        // present; do not reject a tenant-scoped job merely because older poll
-        // responses omit duplicate institution metadata.
-        val institutionIdMismatch =
-            jobInstitutionId.isNotBlank() &&
-                jobInstitutionId != verifiedInstitutionId
-        val institutionCodeMismatch =
-            jobInstitutionCode.isNotBlank() &&
-                normalizeInstitutionCode(jobInstitutionCode) !=
-                normalizeInstitutionCode(verifiedInstitutionCode)
-
-        if (
-            verifiedInstitutionId.isBlank() ||
-            verifiedInstitutionCode.isBlank() ||
-            institutionIdMismatch ||
-            institutionCodeMismatch
-        ) {
-            Log.e(TAG, "SMS job blocked: verified institution identity is missing or server identity mismatched")
-            rejectClaimedJob(
-                jobId, requestId, "INSTITUTION_MISMATCH",
-                "SMS blocked: job does not belong to this verified institution"
-            )
-            return
-        }
+        // Tenant isolation is enforced by Main Server before a job is returned:
+        // device_poll.php authenticates the Gateway token and only claims rows
+        // matching that registered device_id + company_id + institution_id.
+        // Client Server IDs and Main Server IDs are separate namespaces, and
+        // Institution Codes are mutable. Neither is compared against a job here.
+        // The authenticated Main Server device-token scope is authoritative.
+        // Keep local activation/verification as a prerequisite; never remove
+        // the server-side device, company or institution ownership checks.
 
         updateStatus("Processing SMS job")
         Log.i(TAG, "Processing SMS job ID: $jobId")
@@ -952,6 +930,21 @@ class GatewayService : Service() {
     }
 
     /**
+     * User intent is separate from the transient Android Service process state.
+     * PREF_GATEWAY_ENABLED survives service destruction and device reboot.
+     */
+    private fun setGatewayEnabled(enabled: Boolean) {
+        getSharedPreferences(statusPrefsName, MODE_PRIVATE)
+            .edit()
+            .putBoolean(PREF_GATEWAY_ENABLED, enabled)
+            .apply()
+    }
+
+    private fun isGatewayEnabled(): Boolean =
+        getSharedPreferences(statusPrefsName, MODE_PRIVATE)
+            .getBoolean(PREF_GATEWAY_ENABLED, false)
+
+    /**
      * Save server state and the time of the latest state change.
      *
      * MainActivity uses this timestamp to avoid showing an old
@@ -992,6 +985,9 @@ class GatewayService : Service() {
 
     private fun stopGateway() {
 
+        // This method is called only for an explicit ACTION_STOP. Keep the
+        // persisted enabled flag false so BootReceiver cannot restart it.
+        setGatewayEnabled(false)
         serviceRunning = false
         requestInProgress = false
         resultReporting = false
@@ -1151,6 +1147,7 @@ class GatewayService : Service() {
         private const val RETRY_POLL_DELAY_MS = 3000L
 
         private const val PREF_SERVICE_RUNNING = "service_running"
+        private const val PREF_GATEWAY_ENABLED = "gateway_enabled_by_user"
         private const val PREF_SERVER_STATE = "server_state"
         private const val PREF_SERVER_CHECK_AT = "server_check_at"
         private const val PREF_LAST_STATUS_MESSAGE = "last_status_message"
