@@ -487,7 +487,7 @@ class MainActivity : Activity() {
         addDrawerItem("Dashboard", "⌂", { dashboardScroll.smoothScrollTo(0, 0) })
         addDrawerItem("SMS Logs", "▤", { showSmsLogsPage() })
         addDrawerItem("Reports & Analytics", "▥", { showReportsPage() })
-        addDrawerItem("GATEWAY", "▣", { showToast("Gateway options") })
+        addDrawerItem("GATEWAY", "▣", { showGatewayControlPage() })
         addDrawerItem("Gateway Settings", "⚙", { openGatewaySettings() })
         addDrawerItem("Start Gateway Service", "▶", { startGatewayService() })
         addDrawerItem("Stop Gateway Service", "■", { stopGatewayService() })
@@ -503,13 +503,13 @@ class MainActivity : Activity() {
             showPolicyDialog("SMS Permissions", details)
             if (!sendGranted || !phoneGranted) requestRequiredPermissions()
         })
-        addDrawerItem("POLICIES & COMPLIANCE", "▤", { showToast("Policies and compliance") })
+        addDrawerItem("POLICIES & COMPLIANCE", "▤", { showCompliancePage() })
         addDrawerItem("Privacy Policy", "🔒", { showPolicyDialog("Privacy Policy", privacyPolicyText()) })
         addDrawerItem("Telecom & SMS Policy", "◉", { showPolicyDialog("Telecom & SMS Policy", telecomSmsPolicyText()) })
         addDrawerItem("DND & Consent Policy", "✓", { showPolicyDialog("DND, Consent & Opt-out Rules", dndPolicyText()) })
         addDrawerItem("Google Play Store Policy", "▶", { showPolicyDialog("Google Play Store Policy", playStorePolicyText()) })
         addDrawerItem("Android Policy", "▣", { showPolicyDialog("Android App Permissions & Policy", androidPolicyText()) })
-        addDrawerItem("SYSTEM", "⌘", { showToast("System information") })
+        addDrawerItem("SYSTEM", "⌘", { showSystemInformation() })
         addDrawerItem("System Information", "ⓘ", {
             val pm = packageManager
             val version = try { pm.getPackageInfo(packageName, 0).versionName ?: "Unknown" } catch (_: Exception) { "Unknown" }
@@ -810,6 +810,82 @@ class MainActivity : Activity() {
         failedCountText.text = stats.getInt("failed_count", 0).toString()
         // Incoming SMS inbox access is intentionally disabled in this app.
         receivedCountText.text = "—"
+    }
+
+    private fun showGatewayControlPage() {
+        val (scroll, body) = createPageScroll()
+        body.addView(sectionTitle("Gateway Control", "One place for service status and controls"))
+
+        val runtimePrefs = getSharedPreferences(GATEWAY_RUNTIME_PREFS, MODE_PRIVATE)
+        val enabled = runtimePrefs.getBoolean(PREF_GATEWAY_ENABLED_BY_USER, false)
+        val statusPrefs = getSharedPreferences(SERVER_STATUS_PREFS, MODE_PRIVATE)
+        val serviceRunning = statusPrefs.getBoolean(PREF_SERVICE_RUNNING, false)
+        val serverState = statusPrefs.getString(PREF_SERVER_STATE, SERVER_STATE_CONNECTING)
+            ?: SERVER_STATE_CONNECTING
+        val lastMessage = statusPrefs.getString(PREF_LAST_STATUS_MESSAGE, "")?.trim().orEmpty()
+
+        val statusCard = createCard()
+        statusCard.addView(textView(if (enabled) "GATEWAY ENABLED" else "GATEWAY MANUALLY PAUSED", 15f,
+            if (enabled) green else Color.rgb(185, 28, 28), true))
+        statusCard.addView(textView("Service: ${if (serviceRunning) "Running" else "Not running"}", 13f, textDark, true).apply { setPadding(0, dp(8), 0, 0) })
+        statusCard.addView(textView("Main Server: $serverState", 13f, textDark, false).apply { setPadding(0, dp(5), 0, 0) })
+        if (lastMessage.isNotBlank()) {
+            statusCard.addView(textView(lastMessage.take(220), 12f, textMuted, false).apply { setPadding(0, dp(6), 0, 0) })
+        }
+        body.addView(statusCard)
+
+        body.addView(actionButton("Start / Resume Gateway", green) {
+            startGatewayService()
+            body.post { showGatewayControlPage() }
+        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)).apply { topMargin = dp(10) })
+        body.addView(actionButton("Manual Stop Gateway", Color.rgb(185, 28, 28)) {
+            AlertDialog.Builder(this)
+                .setTitle("Stop SMS Gateway?")
+                .setMessage("This stops SMS polling and disables automatic restart. Device registration and token will be retained.")
+                .setNegativeButton("Cancel", null)
+                .setPositiveButton("Stop") { _, _ ->
+                    stopGatewayService()
+                    body.post { showGatewayControlPage() }
+                }
+                .show()
+        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)).apply { topMargin = dp(8) })
+        body.addView(actionButton("Gateway Settings", blue) { openGatewaySettings() },
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)).apply { topMargin = dp(8) })
+        body.addView(textView("The Gateway stays enabled across normal restarts only while the saved Active preference is ON. Android force-stop, battery restrictions, or server-side device deactivation can still prevent background operation.", 12f, textMuted, false).apply {
+            setPadding(dp(4), dp(12), dp(4), dp(4))
+        })
+        replaceMainPage("gateway_control", scroll)
+    }
+
+    private fun showCompliancePage() {
+        val (scroll, body) = createPageScroll()
+        body.addView(sectionTitle("Policies & Compliance", "Open the relevant usage and privacy guidance"))
+        val entries = listOf(
+            Triple("Privacy Policy", "Data handling, tokens and retention", privacyPolicyText()),
+            Triple("Telecom & SMS Policy", "Authorized messaging and delivery status", telecomSmsPolicyText()),
+            Triple("DND, Consent & Opt-out", "Recipient preferences and consent", dndPolicyText()),
+            Triple("Google Play Store Policy", "App permissions and store disclosures", playStorePolicyText()),
+            Triple("Android Permissions Policy", "Android SMS and SIM permissions", androidPolicyText())
+        )
+        entries.forEach { (title, subtitle, contentText) ->
+            val card = createCard()
+            card.addView(textView(title, 15f, navy, true))
+            card.addView(textView(subtitle, 12f, textMuted, false).apply { setPadding(0, dp(5), 0, dp(8)) })
+            card.addView(actionButton("Open $title", blue) { showPolicyDialog(title, contentText) })
+            body.addView(card, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(9) })
+        }
+        replaceMainPage("compliance", scroll)
+    }
+
+    private fun showSystemInformation() {
+        val pm = packageManager
+        val version = try { pm.getPackageInfo(packageName, 0).versionName ?: "Unknown" } catch (_: Exception) { "Unknown" }
+        val runtime = getSharedPreferences(GATEWAY_RUNTIME_PREFS, MODE_PRIVATE)
+        val enabled = runtime.getBoolean(PREF_GATEWAY_ENABLED_BY_USER, false)
+        val serverState = getSharedPreferences(SERVER_STATUS_PREFS, MODE_PRIVATE)
+            .getString(PREF_SERVER_STATE, SERVER_STATE_CONNECTING) ?: SERVER_STATE_CONNECTING
+        showPolicyDialog("System Information",
+            "App: SS MediaOS SMS Gateway\nVersion: $version\nAndroid: ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})\nDevice: ${Build.MANUFACTURER} ${Build.MODEL}\nGateway preference: ${if (enabled) "Active" else "Manually paused"}\nMain Server: $serverState\nSMS permission: ${if (checkSelfPermission(Manifest.permission.SEND_SMS) == PackageManager.PERMISSION_GRANTED) "Granted" else "Not granted"}\nServer: ${SecureConfig.getServerUrl(this) ?: "Not configured"}")
     }
 
     private fun showPolicyDialog(title: String, body: String) {
@@ -1114,6 +1190,13 @@ Review the final target SDK, manifest and service implementation before release;
             return
         }
 
+        if (SecureConfig.getSelectedSimSubscriptionId(this) == null) {
+            updateStatus("Select the SIM assigned to this Gateway before starting.")
+            showToast("Select an active SIM in Gateway Settings first.")
+            openGatewaySettings()
+            return
+        }
+
         val serverUrl = SecureConfig.getServerUrl(this)
         val deviceCode = SecureConfig.getDeviceCode(this)
         val activationToken = SecureConfig.getActivationToken(this)
@@ -1147,11 +1230,18 @@ Review the final target SDK, manifest and service implementation before release;
             return
         }
 
+        val runtimePrefs = getSharedPreferences(GATEWAY_RUNTIME_PREFS, MODE_PRIVATE)
+        val saved = runtimePrefs.edit()
+            .putBoolean(PREF_GATEWAY_ENABLED_BY_USER, true)
+            .commit()
+        if (!saved) {
+            updateStatus("Could not save Gateway active preference.")
+            showToast("Gateway preference could not be saved.")
+            return
+        }
+
         try {
-            val intent = Intent(
-                this,
-                GatewayService::class.java
-            ).apply {
+            val intent = Intent(this, GatewayService::class.java).apply {
                 action = GatewayService.ACTION_START
             }
 
@@ -1162,33 +1252,33 @@ Review the final target SDK, manifest and service implementation before release;
             }
 
             gatewayStartRequested = true
-
-            updateStatus(
-                "Gateway service start requested. Waiting for server response."
-            )
+            updateStatus("Gateway start requested. It will resume after a normal phone restart while enabled.")
+            showToast("SMS Gateway start requested.")
         } catch (e: Exception) {
             gatewayStartRequested = false
-
-            updateStatus(
-                "Could not start service: ${e.localizedMessage}"
-            )
+            runtimePrefs.edit().putBoolean(PREF_GATEWAY_ENABLED_BY_USER, false).apply()
+            updateStatus("Could not start service: ${e.localizedMessage ?: e.javaClass.simpleName}")
         }
     }
 
     private fun stopGatewayService() {
-        val stopped = stopService(
-            Intent(this, GatewayService::class.java)
-        )
+        // Manual stop is the only local action that clears the always-on preference.
+        getSharedPreferences(GATEWAY_RUNTIME_PREFS, MODE_PRIVATE)
+            .edit()
+            .putBoolean(PREF_GATEWAY_ENABLED_BY_USER, false)
+            .commit()
 
         gatewayStartRequested = false
-
-        updateStatus(
-            if (stopped) {
-                "Gateway service stop requested."
-            } else {
-                "Stop requested. Service may already be stopped."
-            }
-        )
+        try {
+            startService(Intent(this, GatewayService::class.java).apply {
+                action = GatewayService.ACTION_STOP
+            })
+            updateStatus("Gateway manually stopped. Device registration and token are retained.")
+            showToast("SMS Gateway manually stopped.")
+        } catch (e: Exception) {
+            stopService(Intent(this, GatewayService::class.java))
+            updateStatus("Gateway stop requested. ${e.localizedMessage ?: e.javaClass.simpleName}")
+        }
     }
 
     private fun openGatewaySettings() {
@@ -1448,6 +1538,9 @@ Review the final target SDK, manifest and service implementation before release;
         private const val PERMISSION_REQUEST_CODE = 1001
 
         // These names must match the values written by GatewayService.kt.
+        private const val GATEWAY_RUNTIME_PREFS = "ss_mediaos_gateway_status"
+        private const val PREF_GATEWAY_ENABLED_BY_USER = "gateway_enabled_by_user"
+
         private const val SERVER_STATUS_PREFS =
             "ss_mediaos_gateway_status"
 
